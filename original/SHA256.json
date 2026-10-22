@@ -1,0 +1,22 @@
+[
+  {
+    "path": "original/CHANGES.txt",
+    "sha256": "5e196d99198828ab9f9d89cd530adffbe9bf4c651362a69e113bc36b28a55306"
+  },
+  {
+    "path": "original/README.txt",
+    "sha256": "c91bf00f8a6dfd145f3abd6fa80c41ad17da3c4a6ed539bf433c3dacd48d8653"
+  },
+  {
+    "path": "original/exact_ser.F90",
+    "sha256": "bf04433d8ed0d9fa5e8947825501b8aab351b697d66380c595c0defe99d3b797"
+  },
+  {
+    "path": "original/exact_v1.F90",
+    "sha256": "bf0c2c690f9601d5663780529a864cb08b1324d83bee5cc283ced38d95486470"
+  },
+  {
+    "path": "original/exact_vect.F90",
+    "sha256": "d2613d929bd40ac1f0dbb4ead7d495572cd33e316ef4507e3114fa73c6807ea0"
+  }
+]

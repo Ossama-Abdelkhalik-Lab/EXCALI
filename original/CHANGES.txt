@@ -1,0 +1,11 @@
+2026-10-19
+- Created Exactv2.2: exact_ser/vect.F90 = contour_study/gauss_legendre_ser/vect.F90 (header comment only changed)
+- Copied ivLam runtime (identical to original) + ivLamTree_20210202_160219_i2d8.bin into ivLam/
+- Drivers: benchmark_lambert.f90, tools/accuracy_compare.f90 (from scratchpad diag.f90), tools/vector_size_sweep.f90;
+  data read from ../fortranInterface, ivLam table from ivLam/
+- Added exact_v1.F90 (Exact v1, code as received) + tools/v1_wrapper.f90; build with -DEXACT_STANDALONE
+- build.sh / run.sh take solver v22 and/or v1; outputs in results/data/<solver>_*
+- tools/plot_results.py: error histogram (exact 99.9% values) and vector-size plot (log time axis)
+- README.txt: methods + results (99.9% |dV1|, speed, vector size)
+2026-10-20
+- docs/Exact_v2.2_documentation.tex + .pdf: interface, method, Exact v1 differences, results, build/run
