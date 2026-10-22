@@ -1,0 +1,41 @@
+{
+  "date": "2026-10-22",
+  "platform": "macOS arm64",
+  "compiler": "GNU Fortran (Homebrew GCC 16.2.0) 16.2.0",
+  "comparison_base_commit": "a5e54ac1692ff71808cdc553a99b2602e960fb9a",
+  "comparison_working_tree": "uncommitted integration changes",
+  "circular": {
+    "cases": 100000,
+    "repetitions": 5,
+    "statistic": "median",
+    "threads": [
+      1,
+      4
+    ],
+    "independent_truth": "circular orbits",
+    "velocity_absolute_gate": 1e-10
+  },
+  "mixed": {
+    "cases_per_class": 2000,
+    "classes": 11,
+    "repetitions": 5,
+    "seed": 12345,
+    "statistic": "minimum of repeated complete-solve block timings",
+    "threads": 1,
+    "independent_truth": "quad-precision Kepler states",
+    "velocity_relative_gate": 1e-10
+  },
+  "solver_ids": {
+    "0": "confluentcontour",
+    "1": "Russell ivLam",
+    "6": "ExactOriginalSerial",
+    "7": "ExactOriginalVector",
+    "8": "eLam"
+  },
+  "notes": [
+    "Initialization excluded; complete adapter paths timed.",
+    "No task-owned builds, propagation tests or MATLAB plot rendering ran concurrently with these final native measurements.",
+    "A failed or rejected solve does not qualify for performance comparison.",
+    "max_rel_err includes inaccurate finite values; invalid rows increment fails and are not assigned an artificial finite error."
+  ]
+}
