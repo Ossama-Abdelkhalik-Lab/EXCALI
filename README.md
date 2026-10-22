@@ -63,4 +63,4 @@ Call `exact_initialize()` once, serially, before using `exact_one` or `exact_bat
 
 No license declaration was supplied with these Exact source files; this package does not invent one. No ivLam source, coefficient data, compiled binaries or external submodules are required or bundled.
 
-See [validation](docs/VALIDATION.md) for measured results and limits. This is a local repository prepared for later publication as `Ossama-Abdelkhalik-Lab/eLam`; no remote publication is performed by its build.
+See [validation](docs/VALIDATION.md) for measured results and limits. The repository is [Ossama-Abdelkhalik-Lab/eLam](https://github.com/Ossama-Abdelkhalik-Lab/eLam). It can be developed independently or checked out as the `solvers/elam` submodule of Lamberts-Comparison; both use the same Git history. Commit and push solver changes here first, then record the updated submodule commit in the comparison repository.
