@@ -2,7 +2,7 @@
 
 A Fortran Lambert solver using finite thin rectangular contour integrals, with elliptic, parabolic, hyperbolic and multiple-revolution coverage. This repository also preserves the supplied Exact v2.2 serial and vectorized kernels as independent, unchanged baselines.
 
-The extended solver is a **new implementation of the rectangle-ratio/Newton strategy**, not a byte-identical version of Exact v2.2. It adds stable conic coordinates and branch safeguards. It does not call the confluent contour solver, ivLam, Izzo or Gooding. It is currently slower than ivLam in the mixed-domain comparison; the supplied original's speed claims must not be applied to this extension.
+The extended solver is a **new implementation of Exact v2.2's thin-rectangle ratio**, not a byte-identical version of it. It takes the rectangle's zero-height limit, which needs only real arithmetic, applies it in one or two fixed stages with no Newton polish, and adds stable conic coordinates and branch safeguards. It does not call the confluent contour solver, ivLam, Izzo or Gooding. On the local mixed benchmark it takes 1.2–1.8 times ivLam's time per transfer at equal or better accuracy (see [validation](docs/VALIDATION.md)); the supplied original's speed claims must not be applied to this extension.
 
 ## Build and test
 
@@ -49,11 +49,19 @@ call elam_solve(r1, r2, tof, mu, direction, revolutions, branch, v1, v2, status,
 
 The original Exact v2.2 uses a lookup-table guess in universal anomaly, an upper-half thin rectangle with eight Gauss–Legendre top nodes and one midpoint on each side, and a Newton correction. It is restricted to zero-revolution elliptic transfers.
 
-The extension retains finite rectangular quadrature and Newton corrections. For each selected branch, it constructs a finite rectangle around the starter and uses the ratio of the first and zeroth contour moments of `1/(T-t)` to propose a root. A bracket rejects out-of-branch proposals and safeguards later Newton corrections with bisection. There is no confluent/Householder Lambert root step or alternate-solver fallback. Analytic parabolic limits and already-converged starters need no quadrature.
+The extension keeps the thin rectangle but evaluates its height-to-zero limit. On a real interval `[c-L, c+L]`, with `f = 1/(T-t)` and Gauss–Legendre nodes `x_i` and weights `w_i`,
 
-Additional coordinates are elliptic half anomaly, distance from the upper elliptic pole, hyperbolic half anomaly, and `sqrt(y)` for very short short-way hyperbolas. The last avoids subtracting nearly equal values at the hyperbolic branch point. Long-way hyperbolic time is rearranged algebraically to avoid cancellation. A separate Halley minimum search selects feasible multi-revolution branches. Radial/transverse velocity reconstruction avoids the near-antipodal cancellation of Lagrange coefficients. Logarithmic unit scaling supports very large and very small dimensional inputs.
+```
+root = c + Q[((x-c) f)'] / Q[f'],    Q[g'] = g(c+L) - g(c-L) - L * sum_i w_i g'(x_i)
+```
 
-Geometry, time derivatives, starters and velocity formulas were adapted from Lamberts-Comparison's `contour_simple`; the root iteration was replaced with finite rectangle quadrature and safeguarded Newton. This provenance is deliberate and does not constitute a fallback to that solver.
+`Q` is the quadrature error of an exact derivative. The ratio is exact for a simple pole anywhere in the interval, so only the analytic remainder of `1/(T-t)` limits it, as `(L/2R)^(2n)` for the nearest other singularity at distance `R`. It needs `T` at the nodes and endpoints and `T'` at the nodes; `T'` comes from the closed-form ODE derivative. There is no complex arithmetic. Node trigonometry uses angle addition with compile-time constants for power-of-two half-widths.
+
+Each solve runs a fixed pipeline: closed-form starter, an 8-node stage with `L ~ R/4`, and, only when the stage's own error estimate is above rounding, a 3-node stage centred on the first estimate. The error estimate is the disagreement of the two independent ratios `Q[((x-c)f)']/Q[f']` and `Q[((x-c)^2 f)']/Q[f']`. `R` is computed analytically: branch points of `sqrt(y)`, the mirror root of the even zero-revolution time function, the other multi-revolution branch, and the complex roots of `T = t` beside a pole of `T` (at `sqrt(3)` times the pole distance). Every accepted interval must show a sign change of `T - t` without containing a pole. An estimate outside its interval re-centres, and an inconsistent one widens the interval. The rare cases whose starter still misses (0–2% by regime) fall back to the earlier bracketed Newton/bisection iteration. Analytic parabolic limits need no quadrature.
+
+Coordinates are `X = ±x²` near the parabola (a power series, which removes the mirror root), elliptic half anomaly, distance from the upper elliptic pole, hyperbolic half anomaly, and `sqrt(y)` for very short short-way hyperbolas. The last avoids subtracting nearly equal values at the hyperbolic branch point. Long-way hyperbolic time is rearranged algebraically to avoid cancellation. A separate Halley minimum search (two or three steps, with the minimum time taken from the last Taylor data) selects feasible multi-revolution branches. Near a pole of `T`, starters solve the pole asymptote `T ~ n*pi*y^1.5/(sqrt2*d^3)` with `y` quadratic in the pole distance `d`, which also covers the plateau of near-full-period long-way transfers. Radial/transverse velocity reconstruction avoids the near-antipodal cancellation of Lagrange coefficients. Logarithmic unit scaling supports very large and very small dimensional inputs.
+
+Geometry, time derivatives, starters and velocity formulas were adapted from Lamberts-Comparison's `contour_simple`; the root iteration was replaced with zero-height rectangle quadrature. This provenance is deliberate and does not constitute a fallback to that solver.
 
 ## Preserved originals
 

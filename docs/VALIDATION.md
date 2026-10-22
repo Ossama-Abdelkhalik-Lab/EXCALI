@@ -24,7 +24,7 @@ The comparison gate requires both endpoint velocities within `1e-10 + 1e-10*norm
 
 ## Timing interpretation
 
-The finite-rectangle extension uses a new implementation with adaptive coordinates and safeguarded corrections; it does not yet retain the original's lookup-table/vectorization optimizations. It is slower than ivLam on the local mixed benchmark. Original and extended timings must be reported separately.
+The numbers in this section and the next were measured before the zero-height rectangle update (see the end of this file). At that time the extension was slower than ivLam on the local mixed benchmark. Original and extended timings must be reported separately.
 
 Original batched adapters include input validation, rotation into individual local transfer planes and rotation of output velocities back to the input frame. Serial and vector variants retain their supplied kernel-specific compiler flags. The common build uses `-O3 -fno-fast-math`; no `-march=native` speed claim is made. Initialization is outside timed regions. Thread counts are matched, and the parallel build is also checked at one thread.
 
@@ -69,3 +69,30 @@ test_comparison;
 ```
 
 Native `benchmark_mixed` retains independent quad-precision orbital truth and per-regime failure counts for IDs 0, 1, 6, 7, 8. `benchmark_native_solvers` exercises complete scalar/batch gateway paths on circular truth. Rejected/failed rows do not justify speed claims. See the CSV files accompanying this report for the final local measurements.
+
+## Zero-height rectangle update — 2026-10-22
+
+The root step now uses the zero-height limit of the thin rectangle in a fixed one- or two-stage pipeline; see the README's Method section. Bracketed Newton/bisection remains only as a fallback for rare starter misses.
+
+- Lamberts-Comparison native CTests: **24/24 passed** (including near-antipodal and near-coincident propagation, 32,400 minimum-time feasibility decisions, and the 50,000-case cross-solver agreement test).
+- Standalone repository: **3/3 passed**, with OpenMP on and off.
+
+`benchmark_mixed`, 2,000 cases per class, five repetitions, one thread, Apple silicon, GNU Fortran 16.2, `-O3`. Errors are maximum relative endpoint velocity errors against quad-precision Kepler truth. All solvers had zero failures.
+
+| Class | ivLam ns | eLam ns | eLam / ivLam | ivLam max error | eLam max error |
+|---|---:|---:|---:|---:|---:|
+| circular_short | 200 | 257 | 1.28 | 3.6e-15 | 1.6e-15 |
+| elliptic_short | 199 | 279 | 1.40 | 1.1e-13 | 4.4e-14 |
+| elliptic_long | 192 | 248 | 1.29 | 3.4e-13 | 2.7e-14 |
+| high_ecc | 188 | 320 | 1.70 | 1.6e-12 | 1.0e-14 |
+| hyperbolic | 198 | 268 | 1.35 | 2.2e-14 | 6.4e-15 |
+| near_parabolic | 178 | 258 | 1.45 | 1.5e-15 | 2.0e-15 |
+| multirev_1 | 256 | 447 | 1.75 | 8.4e-13 | 1.2e-13 |
+| multirev_2_3 | 258 | 425 | 1.64 | 4.9e-13 | 1.4e-13 |
+| multirev_long | 257 | 419 | 1.63 | 1.1e-12 | 4.4e-13 |
+| infeasible_m | 52 | 183 | 3.52 | — | — |
+| hyperbolic_fast | 203 | 241 | 1.19 | 2.9e-15 | 8.2e-15 |
+
+The previous eLam implementation took 4.5–5.3 times ivLam's time on the same benchmark (7.0 for infeasible requests).
+
+On the Lamberts-Comparison 1,000,000-case elliptic dataset, the update was checked on 95,748 selected cases: 50,000 random cases, every transfer within 10° of 0° or 360°, and every transfer within 1° of 180°. The maximum endpoint error matched the previous implementation in every group: 3.1e-13 for the random cases, 1.6e-14 near 360°, 1.2e-12 below 10°, and 6.9e-11 near 180°. Near 180°, 21 cases exceed 1e-12 (20 before); this is the input-conditioning floor that all solvers share there. Fallbacks to the bracketed iteration occurred in 0–2% of cases per group.

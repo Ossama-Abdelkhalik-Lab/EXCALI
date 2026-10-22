@@ -1,22 +1,57 @@
 ! eLam: finite rectangular-contour Lambert root extraction across conics.
-! Extended from Exact v2.2's rectangle-ratio/Newton strategy. Geometry,
-! half-anomaly time functions, derivatives and starters are adapted from
-! this project's contour_simple. No confluent/Householder root steps and
-! no calls to another Lambert solver are used.
+! Extended from Exact v2.2's thin-rectangle ratio. The root comes from the
+! zero-height limit of that rectangle (real Gauss-Legendre quadrature of
+! 1/(T-t) and its derivative), applied in one or two fixed stages without a
+! Newton polish. Geometry, half-anomaly time functions, derivatives and
+! closed-form starters are adapted from this project's contour_simple. No
+! confluent/Householder root steps and no calls to another Lambert solver.
 module elam_solver
    use iso_fortran_env, only: real64
    use ieee_arithmetic, only: ieee_is_finite, ieee_value, ieee_quiet_nan
+   use iso_c_binding, only: c_double
    implicit none
    private
-   public :: elam_one, elam_solve
+   public :: elam_one, elam_solve, rect_ratio
    integer,parameter :: dp=real64
    real(dp),parameter :: pi=acos(-1.0_dp),sqrt2=sqrt(2.0_dp)
    integer,parameter  :: max_steps=120
+   ! Thin-rectangle quadrature in its zero-height limit. On [c-L,c+L],
+   ! L=2**(-kr), with f=1/(T-t) real, Gauss-Legendre nodes x and weights w:
+   !   root = c + Q[((x-c)f)'] / Q[f'],   Q[g'] = g(c+L)-g(c-L) - L*sum w g'(x),
+   ! the quadrature error of an exact derivative. It is exact for a simple
+   ! pole anywhere inside and converges like (L/2R)**(2n) for singularities
+   ! at distance R. Node trig comes from angle addition with compile-time
+   ! half-angle constants (positive nodes; the last entry is the endpoint).
+   integer,parameter  :: kmax=62
+   integer :: j_,k_
+   ! Stage 1: 8-point Gauss-Legendre (positive half, then the endpoint 1).
+   integer,parameter  :: n1=8,h1=n1/2
+   real(dp),parameter :: g8x(h1+1)=[.1834346424956498_dp,.5255324099163290_dp,.7966664774136267_dp,.9602898564975363_dp,1._dp]
+   real(dp),parameter :: g8w(h1)=[.3626837833783620_dp,.3137066458778873_dp,.2223810344533745_dp,.1012285362903763_dp]
+   real(dp),parameter :: g3x(3)=[0._dp,.7745966692414834_dp,1._dp],g3w(2)=[8._dp/9,5._dp/9]
+   real(dp),parameter :: c8(h1+1,0:kmax)=reshape([((cos(.5_dp**(k_+1)*g8x(j_)),j_=1,h1+1),k_=0,kmax)],[h1+1,kmax+1])
+   real(dp),parameter :: s8(h1+1,0:kmax)=reshape([((sin(.5_dp**(k_+1)*g8x(j_)),j_=1,h1+1),k_=0,kmax)],[h1+1,kmax+1])
+   real(dp),parameter :: ch8(h1+1,0:kmax)=reshape([((cosh(.5_dp**(k_+1)*g8x(j_)),j_=1,h1+1),k_=0,kmax)],[h1+1,kmax+1])
+   real(dp),parameter :: sh8(h1+1,0:kmax)=reshape([((sinh(.5_dp**(k_+1)*g8x(j_)),j_=1,h1+1),k_=0,kmax)],[h1+1,kmax+1])
+   real(dp),parameter :: c3(3,0:kmax)=reshape([((cos(.5_dp**(k_+1)*g3x(j_)),j_=1,3),k_=0,kmax)],[3,kmax+1])
+   real(dp),parameter :: s3(3,0:kmax)=reshape([((sin(.5_dp**(k_+1)*g3x(j_)),j_=1,3),k_=0,kmax)],[3,kmax+1])
+   real(dp),parameter :: ch3(3,0:kmax)=reshape([((cosh(.5_dp**(k_+1)*g3x(j_)),j_=1,3),k_=0,kmax)],[3,kmax+1])
+   real(dp),parameter :: sh3(3,0:kmax)=reshape([((sinh(.5_dp**(k_+1)*g3x(j_)),j_=1,3),k_=0,kmax)],[3,kmax+1])
+   ! (1-cos(v))/X in X=v**2 (highest first), for the near-parabolic coordinate.
+   real(dp),parameter :: cser(9)=[1._dp/6402373705728000._dp,-1._dp/20922789888000._dp,1._dp/87178291200._dp, &
+      -1._dp/479001600._dp,1._dp/3628800._dp,-1._dp/40320._dp,1._dp/720._dp,-1._dp/24._dp,.5_dp]
    ! Parabolic series of (v-sin(v)cos(v))/sin(v)**3 in v**2 (highest first),
    ! used for |v|<0.3 on zero-revolution arcs where the closed form cancels.
    real(dp),parameter :: pser(10)=[115665628927._dp/2601853536522240000._dp, &
       3821869001._dp/10751460894720000._dp,133541._dp/48117888000._dp,763967._dp/36324288000._dp, &
       1393481._dp/9081072000._dp,1181._dp/1108800,29._dp/4200,17._dp/420,1._dp/5,2._dp/3]
+
+   interface
+      pure real(c_double) function cbrt(x) bind(c,name='cbrt')
+         import::c_double
+         real(c_double),value,intent(in)::x
+      end function
+   end interface
 
 contains
 
@@ -62,10 +97,11 @@ contains
    if(abs(direction)/=1.or.m<0.or.abs(br)/=1.or..not.(tof>0).or..not.ieee_is_finite(tof))return
 
    !======= Geometry, normalized by the larger radius =======
-   rn1=norm2(r1);rn2=norm2(r2)
+   ! Normalized entry (elam_solve pre-scales): plain dot products suffice.
+   rn1=sqrt(dot_product(r1,r1));rn2=sqrt(dot_product(r2,r2))
    if(.not.(rn1>0.and.rn2>0).or..not.ieee_is_finite(rn1+rn2))return
    scale=max(rn1,rn2);e1=r1/rn1;e2=r2/rn2;rn1=rn1/scale;rn2=rn2/scale
-   h=cross(e1,e2);hn=norm2(h)
+   h=cross(e1,e2);hn=sqrt(dot_product(h,h))
    status=-2
    if(hn<32*epsilon(hn))then
       half=-1
@@ -80,8 +116,10 @@ contains
       half=1
    endif
    if(hn<1e-4_dp)half=1
-   h=h*(direction/hn);t1v=cross(h,e1);t2v=cross(h,e2)
-   cs=norm2(e1+e2)/2;ss=norm2(e2-e1)/2        ! |cos(theta/2)|, |sin(theta/2)|
+   h=h*(direction/hn)
+   t1v=e1+e2;t2v=e2-e1
+   cs=sqrt(dot_product(t1v,t1v))/2;ss=sqrt(dot_product(t2v,t2v))/2 ! |cos(theta/2)|, |sin(theta/2)|
+   t1v=cross(h,e1);t2v=cross(h,e2)
    p=sqrt(rn1*rn2);a=direction*sqrt2*p*cs;b=sqrt2*a
    q=(rn1-rn2)/(sqrt(rn1)+sqrt(rn2))
    yend=q*q+2*p*ss*ss/(1+cs)                  ! y at v=pi (elliptic, any direction)
@@ -100,10 +138,29 @@ contains
          ! Ellipse: cubic Hermite for v**2 in phi=(tp/t)**(1/3), between
          ! v**2=(t-tp)/tv2 at phi=1 and pi-v=phi*(K/tp)**(1/3) at phi=0,
          ! with the exact upper pole T ~ pi*yend**1.5/(sqrt2*(pi-v)**3).
-         phi=(tp/t)**(1._dp/3)
-         x=hermite(phi,pi*pi,-2*pi*sqrt(yend)*(pi/sqrt2/tp)**(1._dp/3),0._dp,-3*tp/tv2)
+         phi=cbrt(tp/t)
+         x=hermite(phi,pi*pi,-2*pi*sqrt(yend)*cbrt(pi/sqrt2/tp),0._dp,-3*tp/tv2)
          if(.not.(x>0))x=(t-tp)/tv2         ! model undershoot: parabolic limit
          x=min(sqrt(x),pi*(1-1e-3_dp))
+         if(x>.75_dp*pi)then
+            ! Near the pole use its asymptote in d=pi-v with y~yend-b*d**2/2:
+            ! T ~ pi*y**1.5/(sqrt2*d**3)+a*sqrt(y), so y/d**2 = Q, solved for d.
+            p=t-a*sqrt(yend)
+            if(p>0)then
+               p=cbrt(sqrt2*p/pi)**2+b/2
+               if(p>0)x=pi-min(sqrt(yend/p),pi/4)
+            endif
+            ! Long way with y_end<<|b|: T plateaus at ~pi*|b|**1.5/4 before
+            ! the pole. Below it, cubic Hermite for v**2 in T between the
+            ! parabola (slope 1/tv2) and v=pi (dT/dv=|b|**1.5/2).
+            if(x>.75_dp*pi.and.b<0)then
+               p=pi*(-b)**1.5_dp/4
+               if(t<p.and.p>tp)then
+                  x=hermite((t-tp)/(p-tp),0._dp,(p-tp)/tv2,pi*pi,(p-tp)*4*pi/(-b)**1.5_dp)
+                  x=min(sqrt(max(x,0._dp)),pi*(1-1e-3_dp))
+               endif
+            endif
+         endif
       else
          ! Hyperbola in w=sqrt(-z)/2: w**2=(tp-t)/tv2 near the parabola.
          k=-1;hi=huge(hi)
@@ -115,7 +172,7 @@ contains
                ! w(Y)=2*asinh(sqrt((y0-Y**2)/(2b))). Either term of
                ! T = a*Y + F*Y**3 alone overestimates Y; start from the smaller.
                call f_derivs(wb,-1,0,f)
-               yy=min(t/a,(t/f(0))**(1._dp/3),0.9_dp*sqrt(y0))
+               yy=min(t/a,cbrt(t/f(0)),0.9_dp*sqrt(y0))
                ! A separate thin rectangle in Y=sqrt(y) avoids the
                ! branch-point cancellation of hyperbolic anomaly space.
                lo=0;hi=sqrt(y0)
@@ -143,11 +200,15 @@ contains
          call time_derivs(x,1,m,y0,yend,a,b,d)
          p=-2*d(1)*d(2)/(2*d(2)**2-d(1)*d(3))
          p=min(max(x+p,x/2),(x+pi)/2)
-         if(abs(p-x)<=1e-12_dp)exit
+         ! Cubic convergence: a step below 1e-3 leaves ~1e-9, and tmin is
+         ! quadratic in the location error.
+         if(abs(p-x)<=1e-3_dp)exit
          x=p
       enddo
-      x=p;call time_derivs(x,1,m,y0,yend,a,b,d)
-      tmin=d(0)
+      ! T and T'' at the final step from the last Taylor data (error O(step**4)).
+      dt=p-x;x=p
+      tmin=d(0)+dt*(d(1)+dt*(d(2)/2+dt*d(3)/6))
+      d(2)=d(2)+dt*d(3)
       status=5
       if(t<tmin*(1-16*epsilon(t)).or..not.(d(2)>0))return
       merged=abs(t-tmin)<=16*epsilon(t)*tmin
@@ -158,14 +219,33 @@ contains
       status=-4
       ! Each branch: cubic Hermite in sig=sqrt(1-(tmin/t)**(1/3)) between the
       ! minimum (v*-v ~ sqrt(6*tmin/T'')*sig) and the pole T ~ K/v**3 at sig=1.
-      sig=sqrt(max(1-(tmin/t)**(1._dp/3),0._dp))
+      sig=sqrt(max(1-cbrt(tmin/t),0._dp))
       k0=y0*sqrt(y0)*m*pi/sqrt2;kpi=yend*sqrt(yend)*(m+1)*pi/sqrt2
+      ! Near a pole the asymptote with y quadratic in the pole distance d,
+      ! T ~ n*pi*y**1.5/(sqrt2*d**3)+a*sqrt(y), y ~ y_p+b*d**2/2 (v=0) or
+      ! y_p-b*d**2/2 (v=pi), gives y/d**2 = Q in closed form; it also covers
+      ! y_p<<|b|, where T plateaus before the pole; used when the Hermite
+      ! starter collapses onto the pole and the model root is well inside.
       if(br<0)then
          hi=x
-         x=hermite(sig,x,-sqrt(6*tmin/d(2)),0._dp,-2*(k0/tmin)**(1._dp/3))
+         x=hermite(sig,x,-sqrt(6*tmin/d(2)),0._dp,-2*cbrt(k0/tmin))
+         p=t-a*sqrt(y0)
+         if(p>0.and.x<.02_dp*hi)then
+            p=cbrt(sqrt2*p/(m*pi))**2-b/2
+            if(p>0)then
+               if(sqrt(y0/p)<hi/2)x=sqrt(y0/p)
+            endif
+         endif
       else
          lo=x
-         x=pi-hermite(sig,pi-x,-sqrt(6*tmin/d(2)),0._dp,-2*(kpi/tmin)**(1._dp/3))
+         x=pi-hermite(sig,pi-x,-sqrt(6*tmin/d(2)),0._dp,-2*cbrt(kpi/tmin))
+         p=t-a*sqrt(yend)
+         if(p>0.and.pi-x<.02_dp*(pi-lo))then
+            p=cbrt(sqrt2*p/((m+1)*pi))**2+b/2
+            if(p>0)then
+               if(sqrt(yend/p)<(pi-lo)/2)x=pi-sqrt(yend/p)
+            endif
+         endif
       endif
       x=min(max(x,lo+(hi-lo)*1e-3_dp),hi-(hi-lo)*1e-3_dp)
    endif
@@ -176,9 +256,12 @@ contains
       p=lo;lo=pi-hi;hi=pi-p;x=pi-x;k=2
    endif
 
-   !======= Finite thin-rectangle ratio and safeguarded Newton =======
+   !======= Root: zero-height thin rectangles =======
    if(x>0.and.yy<0.and..not.merged)then
-      if(.not.converge())return
+      ! Rare starter failures fall back to the safeguarded bracket iteration.
+      if(.not.contour_root())then
+         if(.not.converge())return
+      endif
    endif
 
    !======= Velocities (radial/transverse, cancellation-free) =======
@@ -186,19 +269,26 @@ contains
    if(yy>=0)then
       y=yy*yy;dc=-2*sw-ss*ss/(1+cs)             ! cs-cosh(w), from y
    else
+      ! One pair of half-angle functions gives c, s=sin(x)**2 and y.
+      if(k>0)then
+         sw=sin(x/2);dt=cos(x/2)
+         c=(dt-sw)*(dt+sw);s=(2*sw*dt)**2
+      else
+         sw=sinh(x/2);dt=cosh(x/2)
+         c=1+2*sw*sw;s=-(2*sw*dt)**2
+      endif
       if(k==2)then
-         c=-cos(x);s=sin(x)**2
-         y=y0+2*b*cos(x/2)**2
-         if(b<0)y=yend-2*b*sin(x/2)**2
+         c=-c
+         y=y0+2*b*dt*dt
+         if(b<0)y=yend-2*b*sw*sw
       elseif(k>0)then
-         c=cos(x);s=sin(x)**2
          if(b>=0)then
-            y=y0+2*b*sin(x/2)**2
+            y=y0+2*b*sw*sw
          else
-            y=yend-2*b*cos(x/2)**2
+            y=yend-2*b*dt*dt
          endif
       else
-         c=cosh(x);s=-sinh(x)**2;y=y0-2*b*sinh(x/2)**2
+         y=y0-2*b*sw*sw
       endif
       dc=p*cs-c
       if(p*cs*c>0.and.abs(p*cs+c)>0.5_dp)dc=(s-ss*ss)/(p*cs+c)
@@ -295,6 +385,199 @@ contains
          endif
       end function
 
+      ! Root from zero-height thin rectangles; no derivative steps. Stage 1
+      ! (8 nodes, half-width L~R/4, R the distance to the nearest singularity
+      ! of 1/(T-t)) needs only to contain the starter's root, and then usually
+      ! reaches rounding level. The ratio stays exact for a pole outside the
+      ! interval, so a consistent estimate outside it re-centres. The
+      ! disagreement de of two independent ratios measures the error; when
+      ! above rounding, stage 2 (3 nodes, half-width ~16*de, far inside R)
+      ! converges like (L/2R)**6. Every accepted interval must show a sign
+      ! change of T-t. Singularities: branch points of sqrt(y), the mirror
+      ! root of the even m=0 time function, the other multirevolution branch,
+      ! and the complex roots of T=t near a pole of T. Near the parabola the
+      ! coordinate is X=k*x**2, where T is a series in X. On failure the
+      ! state is restored for the safeguarded fallback.
+      logical function contour_root() result(ok)
+         integer::k0
+         real(dp)::lo0,hi0
+         k0=k;lo0=lo;hi0=hi
+         ok=rect_root()
+         if(.not.ok)then
+            k=k0;lo=lo0;hi=hi0
+         endif
+      end function
+
+      logical function rect_root() result(ok)
+         real(dp)::c,rr,el,dd,de,beta,eta,grow,clamped
+         integer::kind1,kr,pass
+         logical::sc,outside,nox,near
+         ok=.false.
+         ! Branch-point parameters of sqrt(y), computed once (for the
+         ! hyperbolic long way eta holds sqrt(y0/(-2b))).
+         beta=0;eta=0
+         if(b>0)beta=2*asinh(sqrt(y0/(2*b)))
+         if(b<0)then
+            if(k<0)then
+               eta=sqrt(y0/(-2*b))
+            else
+               eta=acosh(1+yend/(-b))
+            endif
+         endif
+         c=x;kind1=k;nox=.false.;de=0
+         ! Stage 1 starts at L~R/4, where 8 nodes usually reach rounding
+         ! level. A self-consistent estimate outside the interval re-centres
+         ! (going straight to stage 2 if already precise enough); an
+         ! inconsistent one (root far away) doubles L, up to ~R.
+         grow=4;outside=.false.
+         do pass=1,5
+            call canonical(kind1,c,de,nox)
+            rr=reach(kind1,c,beta,eta)
+            el=min(1._dp,rr/grow);clamped=el
+            if(kind1==0)el=min(el,.2_dp-abs(c))
+            ! Never reach a pole of T: the sign test would see its jump.
+            if(kind1==2.or.(kind1==1.and.m>0))el=min(el,.9_dp*c)
+            if(kind1==1.or.(kind1==2.and.m>0))el=min(el,.9_dp*(pi-c))
+            clamped=el-clamped
+            if(.not.(el>0))return
+            kr=1-exponent(el)
+            if(kr>kmax)return
+            call rect_ratio(kind1,c,kr,.true.,y0,yend,a,b,t,m,dd,de,sc)
+            el=.5_dp**kr
+            if(abs(dd)<.8_dp*el.and.de<.1_dp*el.and.sc)then
+               c=c+dd;exit
+            endif
+            if(pass==5)return
+            if(abs(dd)<8*el.and.de<.5_dp*abs(dd))then
+               near=abs(dd)<1.5_dp*el
+               c=c+dd
+               if(kind1/=0.and..not.(c>lo.and.c<hi))return
+               call canonical(kind1,c,de,nox)
+               ! Just outside and precise: stage 2 certifies its own sign
+               ! change. Farther out de is no error bound; repeat stage 1.
+               if(near.and.de<reach(kind1,c,beta,eta)/256)then
+                  outside=.true.;exit
+               endif
+            elseif(clamped<0.and.abs(dd)<huge(dd).and.kind1/=0)then
+               ! L is capped by a pole: step towards the estimate instead.
+               c=c+sign(min(abs(dd),el),dd)
+               if(.not.(c>lo.and.c<hi))return
+               call canonical(kind1,c,de,nox)
+            elseif(kind1==0)then
+               ! Root beyond the series region: widen in the anomaly coordinate.
+               kind1=1;if(c<0)kind1=-1
+               c=sqrt(abs(c));grow=2;nox=.true.
+            elseif(grow>1.1_dp)then
+               grow=grow/2
+            else
+               return
+            endif
+         enddo
+         call canonical(kind1,c,de,nox)
+         ! Rounding-level error needs no second stage. Velocities are smooth in
+         ! X near the parabola, so there the floor is absolute.
+         rr=max(abs(c),el*1e-3_dp)
+         if(kind1==0)rr=max(abs(c),1e-2_dp)
+         if(outside.or.de>4*epsilon(c)*rr)then
+            rr=reach(kind1,c,beta,eta)
+            el=min(rr/16,max(16*de,1e-7_dp*rr))
+            if(outside)el=min(rr/16,max(16*de,1e-4_dp*rr))
+            kr=1-exponent(el)
+            if(kr>kmax)return
+            ! 3 nodes suffice far inside R; otherwise use the 8-node rule.
+            call rect_ratio(kind1,c,kr,el>rr/1024,y0,yend,a,b,t,m,dd,de,sc)
+            el=.5_dp**kr
+            if(.not.(abs(dd)<.8_dp*el.and.de<1e-3_dp*el.and.sc))return
+            c=c+dd
+         endif
+         if(kind1==0)then
+            if(c==0)return
+            k=1;if(c<0)k=-1
+            x=sqrt(abs(c))
+         else
+            k=kind1;x=c
+         endif
+         ok=x>0
+      end function
+
+      ! Coordinate for a zero-revolution estimate: X=k*x**2 (series) when
+      ! |x|<0.3 unless excluded (nox), the anomaly beyond |X|=0.15. The error
+      ! estimate de is carried into the new coordinate.
+      subroutine canonical(kind1,c,de,nox)
+         integer,intent(inout)::kind1
+         real(dp),intent(inout)::c,de
+         logical,intent(in)::nox
+         real(dp)::q
+         ! Elliptic v versus distance from the upper pole, with the bracket.
+         if((kind1==1.and.c>.8_dp*pi).or.(kind1==2.and.c>.3_dp*pi))then
+            q=lo;lo=pi-hi;hi=pi-q;c=pi-c;kind1=3-kind1
+         endif
+         if(m/=0)return
+         if(kind1==0.and.abs(c)>.15_dp)then
+            kind1=1;if(c<0)kind1=-1
+            c=sqrt(abs(c));de=de/(2*c)
+         elseif(abs(kind1)==1.and.c<.3_dp.and..not.nox)then
+            c=max(c,0._dp);de=(2*c+de)*de;c=kind1*c*c;kind1=0
+         endif
+      end subroutine
+
+      ! Distance from c to the nearest singularity of 1/(T-t) in the local
+      ! coordinate (kind 0: X; 1: v; 2: pi-v; -1: w).
+      real(dp) function reach(kind1,c,beta,eta) result(rr)
+         integer,intent(in)::kind1
+         real(dp),intent(in)::c,beta,eta
+         rr=huge(rr)
+         select case(kind1)
+         case(0)
+            if(b>0)then
+               rr=abs(c+beta*beta)
+            elseif(b<0)then
+               rr=abs(c-cmplx(pi,eta,dp)**2)
+            endif
+            rr=min(rr,.4_dp)
+         ! Near a pole of T (v=pi; also v=0 for m>0) T~K/d**3, so T=t has two
+         ! complex roots (poles of 1/(T-t)) at sqrt(3) times the distance d.
+         case(1)
+            if(b>0)rr=hypot(c,beta)
+            if(b<0)rr=hypot(pi-c,eta)
+            rr=min(rr,1.6_dp*(pi-c))
+            if(m>0)rr=min(rr,1.6_dp*c)
+         case(2)
+            if(b>0)rr=hypot(pi-c,beta)
+            if(b<0)rr=hypot(c,eta)
+            rr=min(rr,1.6_dp*c)
+            if(m>0)rr=min(rr,1.6_dp*(pi-c))
+         case default
+            if(b>0)then
+               rr=beta-c
+            elseif(b<0)then
+               ! Branch point 2*asinh(i*s), s=sqrt(y0/(-2b)): 2i*asin(s) if s<=1,
+               ! else 2*acosh(s)+i*pi.
+               if(eta<=1)then
+                  rr=hypot(c,2*asin(eta))
+               else
+                  rr=hypot(c-2*acosh(eta),pi)
+               endif
+            endif
+         end select
+         if(kind1/=0)then
+            if(m==0.and.kind1/=2)then
+               rr=min(rr,2*c)
+            elseif(m>0)then
+               ! Only the minimum end of the bracket matters: beyond it lies the
+               ! other branch's root. The pole of T at the other end is a zero
+               ! of 1/(T-t), not a singularity.
+               if((kind1==1).eqv.(br<0))then
+                  rr=min(rr,hi-c)
+               else
+                  rr=min(rr,c-lo)
+               endif
+            endif
+         endif
+      end function
+
+
+
       logical function converge_y() result(ok)
          real(dp)::res,der,trial,rad,old
          integer::j
@@ -372,16 +655,132 @@ contains
 
    end subroutine elam_one
 
+   ! Zero-height thin rectangle on [c-L,c+L], L=2**(-kr): Gauss-Legendre
+   ! 8 (stage 1) or 3 (stage 2) nodes plus the two endpoints. dd=Q1/Q0
+   ! locates the enclosed root; de=|Q2/Q0-dd**2|/L vanishes for a single
+   ! pole and measures the error; sc certifies a sign change of T-t.
+   ! Nodes (kind 0: X=k*x**2 series; 1: v; 2: pi-v; -1: w) are evaluated
+   ! in array statements so independent nodes overlap; s0,c0 are the half-
+   ! angle functions of c and ct,st those of el*u, combined by addition.
+   pure subroutine rect_ratio(kind1,c,kr,eight,y0,yend,a,b,t,m,dd,de,sc)
+      integer,intent(in)::kind1,kr,m
+      real(dp),intent(in)::c,y0,yend,a,b,t
+      logical,intent(in)::eight
+      real(dp),intent(out)::dd,de
+      logical,intent(out)::sc
+      integer,parameter::mx=10
+      real(dp),dimension(mx)::uu,ct,st,wq,xs,sh,ch,sn,cn,yv,y1,ff,ff1,q,g,g1,f,f1,rs,ser,ser1
+      real(dp)::el,s0,c0,q0,q1,q2,pk,fa,fb
+      integer::np,j,n
+      el=.5_dp**kr
+      if(eight)then
+         np=n1+2
+         uu(1:h1)=g8x(1:h1);uu(h1+1:n1)=-g8x(1:h1);uu(n1+1)=1;uu(n1+2)=-1
+         wq(1:h1)=g8w;wq(h1+1:n1)=g8w
+         if(kind1<0)then
+            ct(1:h1)=ch8(1:h1,kr);st(1:h1)=sh8(1:h1,kr);ct(n1+1)=ch8(h1+1,kr);st(n1+1)=sh8(h1+1,kr)
+         else
+            ct(1:h1)=c8(1:h1,kr);st(1:h1)=s8(1:h1,kr);ct(n1+1)=c8(h1+1,kr);st(n1+1)=s8(h1+1,kr)
+         endif
+         ct(h1+1:n1)=ct(1:h1);st(h1+1:n1)=-st(1:h1);ct(n1+2)=ct(n1+1);st(n1+2)=-st(n1+1)
+      else
+         np=5
+         uu(1:5)=[0._dp,g3x(2),-g3x(2),1._dp,-1._dp]
+         wq(1:3)=[g3w(1),g3w(2),g3w(2)]
+         if(kind1<0)then
+            ct(1:2)=ch3(1:2,kr);st(1:2)=sh3(1:2,kr);ct(4)=ch3(3,kr);st(4)=sh3(3,kr)
+         else
+            ct(1:2)=c3(1:2,kr);st(1:2)=s3(1:2,kr);ct(4)=c3(3,kr);st(4)=s3(3,kr)
+         endif
+         ct(3)=ct(2);st(3)=-st(2);ct(5)=ct(4);st(5)=-st(4)
+      endif
+      xs(1:np)=c+el*uu(1:np)
+      select case(kind1)
+      case(0)
+         ser(1:np)=cser(1);ser1(1:np)=0
+         do n=2,9
+            ser1(1:np)=ser1(1:np)*xs(1:np)+ser(1:np);ser(1:np)=ser(1:np)*xs(1:np)+cser(n)
+         enddo
+         yv(1:np)=y0+b*xs(1:np)*ser(1:np);y1(1:np)=b*(ser(1:np)+xs(1:np)*ser1(1:np))
+         g(1:np)=pser(1);g1(1:np)=0
+         do n=2,10
+            g1(1:np)=g1(1:np)*xs(1:np)+g(1:np);g(1:np)=g(1:np)*xs(1:np)+pser(n)
+         enddo
+         ff(1:np)=g(1:np)/sqrt2;ff1(1:np)=g1(1:np)/sqrt2
+      case(1,2)
+         s0=sin(c/2);c0=cos(c/2)
+         sh(1:np)=s0*ct(1:np)+c0*st(1:np);ch(1:np)=c0*ct(1:np)-s0*st(1:np)
+         sn(1:np)=2*sh(1:np)*ch(1:np);cn(1:np)=(ch(1:np)-sh(1:np))*(ch(1:np)+sh(1:np))
+         rs(1:np)=1/sn(1:np)
+         ! y = y0+2b*sin(v/2)**2 or yend-2b*cos(v/2)**2; v=pi-x swaps them.
+         if((kind1==1).eqv.(b>=0))then
+            yv(1:np)=merge(y0,yend,b>=0)+2*abs(b)*sh(1:np)**2
+         else
+            yv(1:np)=merge(y0,yend,b>=0)+2*abs(b)*ch(1:np)**2
+         endif
+         pk=1;if(kind1==2)pk=-1
+         y1(1:np)=pk*b*sn(1:np)
+         ff(1:np)=(pk*(xs(1:np)-sn(1:np)*cn(1:np))+merge(m*pi,(m+1)*pi,kind1==1))/sqrt2*rs(1:np)**3
+         ff1(1:np)=(pk*sqrt2-3*cn(1:np)*ff(1:np))*rs(1:np)
+      case default
+         s0=sinh(c/2);c0=cosh(c/2)
+         sh(1:np)=s0*ct(1:np)+c0*st(1:np);ch(1:np)=c0*ct(1:np)+s0*st(1:np)
+         sn(1:np)=2*sh(1:np)*ch(1:np);cn(1:np)=1+2*sh(1:np)**2
+         rs(1:np)=1/sn(1:np)
+         yv(1:np)=y0-2*b*sh(1:np)**2;y1(1:np)=-b*sn(1:np)
+         ff(1:np)=(sn(1:np)*cn(1:np)-xs(1:np))/sqrt2*rs(1:np)**3
+         ff1(1:np)=(sqrt2-3*cn(1:np)*ff(1:np))*rs(1:np)
+      end select
+      q(1:np)=sqrt(yv(1:np))
+      if(kind1<0.and.b<0.and.c>=0.3_dp)then
+         ! Cancellation-free long-way hyperbolic form and its derivative.
+         g(1:np)=((y0+b)*cn(1:np)-b)*rs(1:np)**2-yv(1:np)*xs(1:np)*rs(1:np)**3
+         g1(1:np)=(y0+b)*rs(1:np)-2*((y0+b)*cn(1:np)-b)*cn(1:np)*rs(1:np)**3 &
+            -(y1(1:np)*xs(1:np)+yv(1:np))*rs(1:np)**3+3*yv(1:np)*xs(1:np)*cn(1:np)*rs(1:np)**4
+         f(1:np)=1/(q(1:np)*g(1:np)/sqrt2-t)
+         f1(1:np)=-(y1(1:np)/(2*q(1:np))*g(1:np)+q(1:np)*g1(1:np))/sqrt2*f(1:np)**2
+      else
+         g(1:np)=yv(1:np)*ff(1:np)+a
+         f(1:np)=1/(q(1:np)*g(1:np)-t)
+         f1(1:np)=-(y1(1:np)/(2*q(1:np))*g(1:np)+q(1:np)*(y1(1:np)*ff(1:np)+yv(1:np)*ff1(1:np)))*f(1:np)**2
+      endif
+      ! Q[g'] = g(c+L)-g(c-L) - L*sum w g'(x) for g = f, (x-c)f, (x-c)**2 f.
+      fb=f(np-1);fa=f(np)
+      q0=0;q1=0;q2=0
+      do j=1,np-2
+         q0=q0+wq(j)*f1(j)
+         q1=q1+wq(j)*(uu(j)*el*f1(j)+f(j))
+         q2=q2+wq(j)*uu(j)*el*(uu(j)*el*f1(j)+2*f(j))
+      enddo
+      q0=fb-fa-el*q0
+      q1=el*(fb+fa)-el*q1
+      q2=el*el*(fb-fa)-el*q2
+      dd=q1/q0
+      de=abs(q2/q0-dd*dd)/el
+      sc=fa*fb<0                     ! T-t changes sign: a root is inside
+      if(.not.(de==de).or..not.(dd==dd))then
+         dd=huge(dd);de=huge(de)
+      endif
+   end subroutine
+
+
+
    !> F and its first three derivatives in x: k=+1, x=v (elliptic);
    !! k=-1, x=w (hyperbolic, sinh/cosh).
-   pure subroutine f_derivs(x,k,m,f)
+   pure subroutine f_derivs(x,k,m,f,sx,cx)
    real(dp),intent(in)  :: x
    integer,intent(in)   :: k,m
    real(dp),intent(out) :: f(0:3)
+   real(dp),optional,intent(in) :: sx,cx   ! sin/cos (sinh/cosh) of x if known
    real(dp) :: s,c,r,g(0:3),xx
    integer  :: j
    if(k==2)then
-      s=sin(x);c=cos(x);r=1/s
+      if(present(sx))then
+         s=sx;c=cx
+      else
+         s=sin(x);c=cos(x)
+      endif
+      r=1/s
       f(0)=((m+1)*pi-x+s*c)/sqrt2*r**3
       f(1)=(-sqrt2-3*c*f(0))*r
       f(2)=(3*s*f(0)-4*c*f(1))*r
@@ -396,7 +795,9 @@ contains
       f(0)=g(0);f(1)=2*k*x*g(1);f(2)=8*x*x*g(2)+2*k*g(1);f(3)=48*k*x**3*g(3)+24*x*g(2)
    else
       ! Closed form and the ODE  s*F' + 3*c*F = sqrt2  (s'=c, c'=-k*s).
-      if(k>0)then
+      if(present(sx))then
+         s=sx;c=cx
+      elseif(k>0)then
          s=sin(x);c=cos(x)
       else
          s=sinh(x);c=cosh(x)
@@ -435,7 +836,7 @@ contains
    if(k==2)then
       y1=-b*s;y2=-b*c;y3=b*s
    endif
-   call f_derivs(x,k,m,f)
+   call f_derivs(x,k,m,f,s,c)
    q=sqrt(y);q1=y1/(2*q);q2=(y2/2-q1*q1)/q;q3=(y3/2-3*q1*q2)/q
    p=y*f(0)+a;p1=y1*f(0)+y*f(1);p2=y2*f(0)+2*y1*f(1)+y*f(2)
    p3=y3*f(0)+3*y2*f(1)+3*y1*f(2)+y*f(3)
