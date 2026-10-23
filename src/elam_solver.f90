@@ -351,11 +351,12 @@ contains
       if(p*cs*c>0.and.abs(p*cs+c)>0.5_dp)dc=(s-ss*ss)/(p*cs+c)
    endif
    ratio=sqrt(rn2/rn1)
-   vr1=sqrt2*(dc+p*cs*(rn2-rn1)/(rn1*(ratio+1)))/sqrt(y)
-   vr2=-sqrt2*(dc+p*cs*(rn1-rn2)/(rn2*(1/ratio+1)))/sqrt(y)
-   vt1=sqrt2*ratio*ss/sqrt(y);vt2=sqrt2*ss/(ratio*sqrt(y))
-   v1=(vr1*e1+vt1*t1v)/sqrt(scale)
-   v2=(vr2*e2+vt2*t2v)/sqrt(scale)
+   y=sqrt2/sqrt(y*scale)                     ! common factor sqrt(2/(y*scale))
+   vr1=y*(dc+p*cs*(rn2-rn1)/(rn1*(ratio+1)))
+   vr2=-y*(dc+p*cs*(rn1-rn2)/(rn2*(1/ratio+1)))
+   vt1=y*ratio*ss;vt2=y*ss/ratio
+   v1=vr1*e1+vt1*t1v
+   v2=vr2*e2+vt2*t2v
    status=0
    if(merged)status=1
    if(.not.all(ieee_is_finite(v1)).or..not.all(ieee_is_finite(v2)))status=-4
@@ -743,7 +744,7 @@ contains
       real(dp),intent(out)::dd,de
       logical,intent(out)::sc
       real(dp),dimension(n1+2)::uu,wq,ct,st,f,f1
-      real(dp)::el,q0,q1,q2,fa,fb,x,sh,ch,sn,cn,rs,yv,y1,ff,ff1,q,g,g1,ser,ser1,pk,y00,ab,mt,sg
+      real(dp)::el,q0,q1,q2,r0,r1,r2,fa,fb,x,sh,ch,sn,cn,rs,yv,y1,ff,ff1,q,g,g1,ser,ser1,pk,y00,ab,mt,sg
       integer::np,j,n
       logical::lw,us
       el=pow2m(kr)
@@ -822,19 +823,31 @@ contains
          enddo
       end select
       ! Q[g'] = g(c+L)-g(c-L) - L*sum w g'(x) for g = f, (x-c)f, (x-c)**2 f.
+      ! Two interleaved partial sums shorten the dependent chain.
       fb=f(np-1);fa=f(np)
-      q0=0;q1=0;q2=0
-      do j=1,np-2
+      q0=0;q1=0;q2=0;r0=0;r1=0;r2=0
+      do j=1,np-3,2
          x=el*uu(j)
          q0=q0+wq(j)*f1(j)
          q1=q1+wq(j)*(x*f1(j)+f(j))
          q2=q2+wq(j)*x*(x*f1(j)+2*f(j))
+         x=el*uu(j+1)
+         r0=r0+wq(j+1)*f1(j+1)
+         r1=r1+wq(j+1)*(x*f1(j+1)+f(j+1))
+         r2=r2+wq(j+1)*x*(x*f1(j+1)+2*f(j+1))
       enddo
-      q0=fb-fa-el*q0
-      q1=el*(fb+fa)-el*q1
-      q2=el*el*(fb-fa)-el*q2
-      dd=q1/q0
-      de=abs(q2/q0-dd*dd)/el
+      if(mod(np,2)==1)then
+         j=np-2;x=el*uu(j)
+         q0=q0+wq(j)*f1(j)
+         q1=q1+wq(j)*(x*f1(j)+f(j))
+         q2=q2+wq(j)*x*(x*f1(j)+2*f(j))
+      endif
+      q0=fb-fa-el*(q0+r0)
+      q1=el*(fb+fa)-el*(q1+r1)
+      q2=el*el*(fb-fa)-el*(q2+r2)
+      q=1/q0
+      dd=q1*q
+      de=abs(q2*q-dd*dd)*pow2m(-kr)
       sc=fa*fb<0                     ! T-t changes sign: a root is inside
       if(.not.(de==de).or..not.(dd==dd))then
          dd=huge(dd);de=huge(de)
