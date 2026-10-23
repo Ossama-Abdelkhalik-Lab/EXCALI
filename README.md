@@ -2,7 +2,7 @@
 
 A Fortran Lambert solver using finite thin rectangular contour integrals, with elliptic, parabolic, hyperbolic and multiple-revolution coverage. This repository also preserves the supplied Exact v2.2 serial and vectorized kernels as independent, unchanged baselines.
 
-The extended solver is a **new implementation of Exact v2.2's thin-rectangle ratio**, not a byte-identical version of it. It takes the rectangle's zero-height limit, which needs only real arithmetic, applies it in one or two fixed stages with no Newton polish, and adds stable conic coordinates and branch safeguards. It does not call the confluent contour solver, ivLam, Izzo or Gooding. On the local mixed benchmark it takes 0.4–1.1 times ivLam's time per transfer (0.91 overall) at equal or better accuracy (see [validation](docs/VALIDATION.md)); the supplied original's speed claims must not be applied to this extension.
+The extended solver is a **new implementation of Exact v2.2's thin-rectangle ratio**, not a byte-identical version of it. It takes the rectangle's zero-height limit, which needs only real arithmetic, applies it in one or two fixed stages with no Newton polish, and adds stable conic coordinates and branch safeguards. It does not call the confluent contour solver, ivLam, Izzo or Gooding. On the local mixed benchmark (Apple M1 Pro) it takes 0.4–1.1 times ivLam's time per transfer (0.91 overall) at equal or better accuracy. It is portable standard Fortran, tested on macOS and on Linux aarch64/x86-64 (see [validation](docs/VALIDATION.md)); the supplied original's speed claims must not be applied to this extension.
 
 ## Build and test
 

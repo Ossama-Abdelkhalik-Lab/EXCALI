@@ -14,6 +14,10 @@ module elam_solver
    public :: elam_one, elam_solve, rect_ratio
    integer,parameter :: dp=real64
    real(dp),parameter :: pi=acos(-1.0_dp),sqrt2=sqrt(2.0_dp),rsqrt2=1/sqrt2
+   ! The bit-pattern helpers (pow2m, kexp, rlog, rcbrt) assume IEEE-754
+   ! binary64; on any other real format they use the standard intrinsics.
+   logical,parameter  :: ieee64=radix(1._dp)==2.and.digits(1._dp)==53.and. &
+      maxexponent(1._dp)==1024.and.minexponent(1._dp)==-1021.and.bit_size(0_int64)==64
    integer,parameter  :: max_steps=120
    ! Thin-rectangle quadrature in its zero-height limit. On [c-L,c+L],
    ! L=2**(-kr), with f=1/(T-t) real, Gauss-Legendre nodes x and weights w:
@@ -984,15 +988,26 @@ contains
    d(3)=q3*p+3*q2*p1+3*q1*p2+q*p3
    end subroutine time_derivs
 
-   ! 2**(-k) and 1-exponent(x) (x>0) from the bit pattern, without calls.
+   ! 2**(-k) (|k|<1000) and 1-exponent(x) (x>0) from the bit pattern;
+   ! gfortran implements the scale/exponent intrinsics as library calls.
    elemental real(dp) function pow2m(k) result(y)
       integer,intent(in)::k
-      y=transfer(shiftl(int(1023-k,int64),52),y)
+      if(ieee64)then
+         y=transfer(shiftl(int(1023-k,int64),52),y)
+      else
+         y=scale(1._dp,-k)
+      endif
    end function
 
    elemental integer function kexp(x) result(k)
       real(dp),intent(in)::x
-      k=1023-int(shiftr(transfer(x,0_int64),52))
+      if(ieee64.and.x>=tiny(x))then
+         k=1023-int(shiftr(transfer(x,0_int64),52))
+      elseif(x>0)then
+         k=1-exponent(x)
+      else
+         k=huge(k)
+      endif
    end function
 
    ! asinh(s), s>=0, to ~2e-5 for singularity distances: series below 1/2,
@@ -1015,7 +1030,7 @@ contains
       real(dp),parameter::ln2=log(2._dp)
       integer(int64)::i,e
       real(dp)::m,z,q
-      if(.not.(x>=tiny(x).and.x<=huge(x)))then
+      if(.not.(ieee64.and.x>=tiny(x).and.x<=huge(x)))then
          y=log(x);return
       endif
       i=transfer(x,i);e=shiftr(i,52)-1023
@@ -1032,7 +1047,7 @@ contains
    elemental real(dp) function rcbrt(x) result(y)
       real(dp),intent(in)::x
       real(dp)::w,r
-      if(.not.(x>=tiny(x).and.x<=huge(x)))then
+      if(.not.(ieee64.and.x>=tiny(x).and.x<=huge(x)))then
          y=cbrt_c(x);return
       endif
       y=transfer(transfer(x,0_int64)/3+3071306045661749710_int64,y)

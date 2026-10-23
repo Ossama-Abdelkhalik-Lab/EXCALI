@@ -147,9 +147,21 @@ Average work per solve, from instrumented builds:
 
 **Profile-guided build:** `ELAM_PGO=USE` makes eLam a further 3–5% faster in every class. The table above does not use it, because the comparison builds every solver with the same flags.
 
-**Measured and not adopted:**
-- **Mixed precision:** a single-precision stage 1 saves 4–11 ns per 8-node stage. It then needs a double-precision stage 2 on every solve, instead of on about 10% of solves, so it is a net loss.
-- **Derivative-based (Turán-type) quadrature:** per node, the kernel now costs about 2 ns (5 nodes against 10 differ by about 10 ns). Using `T''` to drop three nodes would save under 6 ns, before its extra work.
-- **Inline polynomial sin/cos:** accurate to 1.4 ulp, but no faster than the library call in the real solve, where the call's latency overlaps with other work.
-- **`-mcpu=native`, `-funroll-loops`, `-fno-math-errno`:** no measurable effect.
-- **Batching problems in lockstep:** not attempted. NEON holds two doubles, and the remaining time is a dependency chain within each solve rather than arithmetic throughput.
+**Measured on this machine and not adopted.** These are platform-dependent trade-offs. The adopted code has no platform-specific paths, so none of these choices is built into it:
+- **Mixed precision:** a single-precision stage 1 saved 4–11 ns per 8-node stage. It then needs a double-precision stage 2 on every solve, instead of on about 10% of solves, so here it was a net loss. With wider single-precision vectors (for example AVX-512) the balance could change.
+- **Derivative-based (Turán-type) quadrature:** per node, the kernel costs about 2 ns here (5 nodes against 10 differ by about 10 ns). Using `T''` to drop three nodes would save under 6 ns, before its extra work.
+- **Inline polynomial sin/cos:** accurate to 1.4 ulp, but no faster than the library call in the real solve. The library pair is kept everywhere. A platform-specific entry such as Apple's `__sincos_stret` gained about 1% and was rejected as nonportable.
+- **`-mcpu=native`, `-funroll-loops`, `-fno-math-errno`:** no measurable effect here.
+- **Batching problems in lockstep:** not attempted. On this machine's two-double vectors, the remaining time is a dependency chain within each solve rather than arithmetic throughput. Wider x86 vectors could make it worthwhile.
+
+### Portability
+
+The solver uses only standard Fortran 2008 and the C99 functions `cbrt` and `log1p`. The fast cube root, logarithm, powers of two and exponents read the IEEE-754 binary64 bit pattern. A compile-time check (`ieee64`) switches them to the standard intrinsics on any other real format. A build with that switch forced off passed the same accuracy checks.
+
+Also checked in Docker (`gcc:14` image, GNU Fortran 14.4, glibc):
+
+- **Linux aarch64 and Linux x86-64:** the standalone tests pass, 3/3 with OpenMP on and 3/3 with it off. The x86-64 run is emulated, so it gives no timing information.
+- **95,748 selected cases on Linux aarch64:** the errors are identical to macOS.
+- **95,748 selected cases on Linux x86-64:** no case is worse than 4× the previous eLam on that platform, and every group maximum is unchanged from it. In the near-180° group, both versions differ from their macOS results in 47 cases, with a maximum of 1.0e-10 against 6.9e-11. That group sits at the input-conditioning floor, where x86-64's different rounding (no fused multiply-add by default) and different libm show.
+
+All the timings in this file are from one Apple M1 Pro. Native x86-64 timings have not been measured.
