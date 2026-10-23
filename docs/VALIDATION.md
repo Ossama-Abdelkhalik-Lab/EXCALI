@@ -96,3 +96,60 @@ The root step now uses the zero-height limit of the thin rectangle in a fixed on
 The previous eLam implementation took 4.5–5.3 times ivLam's time on the same benchmark (7.0 for infeasible requests).
 
 On the Lamberts-Comparison 1,000,000-case elliptic dataset, the update was checked on 95,748 selected cases: 50,000 random cases, every transfer within 10° of 0° or 360°, and every transfer within 1° of 180°. The maximum endpoint error matched the previous implementation in every group: 3.1e-13 for the random cases, 1.6e-14 near 360°, 1.2e-12 below 10°, and 6.9e-11 near 180°. Near 180°, 21 cases exceed 1e-12 (20 before); this is the input-conditioning floor that all solvers share there. Fallbacks to the bracketed iteration occurred in 0–2% of cases per group.
+
+## Speed update — 2026-10-23
+
+The root extraction is unchanged: closed-form starter, one 8-node zero-height rectangle, and a 3-node rectangle only when the first stage's own error estimate is above rounding. The speed-up comes from the surrounding work:
+
+- **Infeasible multi-revolution times** are rejected by the bound `T > m*2*pi*(s/2)^1.5` (from `a >= s/2`) before `T` is evaluated. This bound lies within 31% of the true minimum time.
+- **Minimum-time search:** the large-`m` starter now uses `y(pi)=y0+2b` for `b>0` (it previously used the `b<0` value), which cuts its error from up to 0.31 to about `0.15/m`. Halley stops once its measured error bounds (`12*step^3` in `v`, `300*step^4` relative in `tmin`) decide feasibility. Half-angle functions come from `cos v` and then by angle addition, so the search makes no trig calls. Within 1% of the minimum time, the branch starter inverts the local cubic Taylor model.
+- **Short-way elliptic starters** had the same `y(pi)` error in the pole asymptote. Fixing it reduces first-pass rectangle misses on short arcs from 37% to about 12%.
+- **Rectangle kernel:** one fused loop per coordinate over compile-time tables of mirror nodes, constant multiplies instead of divisions, two partial sums, and one reciprocal for the ratio and error estimate. An 8-node stage now costs about 35 ns (66 before) in the half-anomaly coordinate and 45 ns (120 before) in the parabolic series coordinate.
+- **Library calls:** starters use a bit-pattern cube root with one Halley correction (relative error 2e-5; the contour sets the accuracy). Branch-point distances use a fast logarithm. Powers of two and exponents come from bit patterns (gfortran otherwise calls `__powidf2` and `frexp`). The complex `**2` in the X-plane distance is replaced by real arithmetic. `sinh(wb)` uses an identity, and the centre's half-angle functions are carried between stages and into the velocities.
+
+All 24 Lamberts-Comparison CTests pass. The standalone repository passes 3/3 with OpenMP on and off, and also with `ELAM_PGO=USE`.
+
+`benchmark_mixed`, 2,000 cases per class, minimum of five block timings in each of five interleaved runs, one thread, Apple M1 Pro, GNU Fortran 16.2, `-O3 -fno-fast-math` (no PGO). All solvers had zero failures. "Before" is eLam at commit 50b9585.
+
+| Class | ivLam ns | eLam before | eLam now | now / ivLam | ivLam max error | eLam max error |
+|---|---:|---:|---:|---:|---:|---:|
+| circular_short | 198 | 253 | 158 | 0.80 | 3.6e-15 | 2.2e-15 |
+| elliptic_short | 197 | 278 | 164 | 0.83 | 1.1e-13 | 4.4e-14 |
+| elliptic_long | 186 | 242 | 169 | 0.91 | 3.4e-13 | 2.7e-14 |
+| high_ecc | 185 | 318 | 185 | 1.00 | 1.6e-12 | 1.0e-14 |
+| hyperbolic | 197 | 267 | 178 | 0.90 | 2.2e-14 | 6.4e-15 |
+| near_parabolic | 176 | 253 | 158 | 0.90 | 1.5e-15 | 2.0e-15 |
+| multirev_1 | 253 | 441 | 279 | 1.10 | 8.4e-13 | 5.8e-13 |
+| multirev_2_3 | 253 | 424 | 248 | 0.98 | 4.9e-13 | 2.2e-13 |
+| multirev_long | 254 | 411 | 247 | 0.97 | 1.1e-12 | 3.9e-13 |
+| infeasible_m | 51 | 180 | 21 | 0.40 | — | — |
+| hyperbolic_fast | 202 | 236 | 154 | 0.76 | 2.9e-15 | 6.8e-15 |
+| **overall** | | | | **0.91** (1.53 before) | | |
+
+Average work per solve, from instrumented builds:
+
+| Class | 8-node stages | 3-node stage | Fallback |
+|---|---:|---:|---:|
+| circular_short | 1.13 | 2.2% | 0.20% |
+| elliptic_short | 1.10 | 14% | 0.10% |
+| elliptic_long | 1.02 | 14% | 0.25% |
+| high_ecc | 1.16 | 17% | 0.70% |
+| hyperbolic | 1.11 | 14% | 0.40% |
+| near_parabolic | 1.00 | 0.5% | 0 |
+| multirev_1 | 1.06 | 11% | 0.40% |
+| multirev_2_3 | 1.04 | 6% | 0.15% |
+| multirev_long | 1.05 | 5% | 0.10% |
+| hyperbolic_fast | 1.00 | 0.2% | 0 |
+
+**Accuracy:**
+- **95,748 selected cases** from the 1,000,000-case elliptic dataset: every case is within 4× of the previous implementation's error (or below 1e-14). The group maxima are unchanged: 3.1e-13 for the random cases, 1.6e-14 near 360°, 1.2e-12 below 10° and 6.9e-11 near 180°.
+- **Multi-revolution, 20,000 cases per class** under three seeds, compared case by case: p99.9 errors match the previous implementation within ±30%. Cases that got worse and cases that got better occur in similar numbers. All of them lie within about 1e-5 of the minimum time, where the root is poorly conditioned, and the two versions agree to about 1e-13. Per-seed worst cases moved both ways: 1.3e-9 → 1.0e-9 and 1.5e-10 → 1.6e-11 on two seeds, and 3.3e-12 → 1.6e-11 on the third.
+
+**Profile-guided build:** `ELAM_PGO=USE` makes eLam a further 3–5% faster in every class. The table above does not use it, because the comparison builds every solver with the same flags.
+
+**Measured and not adopted:**
+- **Mixed precision:** a single-precision stage 1 saves 4–11 ns per 8-node stage. It then needs a double-precision stage 2 on every solve, instead of on about 10% of solves, so it is a net loss.
+- **Derivative-based (Turán-type) quadrature:** per node, the kernel now costs about 2 ns (5 nodes against 10 differ by about 10 ns). Using `T''` to drop three nodes would save under 6 ns, before its extra work.
+- **Inline polynomial sin/cos:** accurate to 1.4 ulp, but no faster than the library call in the real solve, where the call's latency overlaps with other work.
+- **`-mcpu=native`, `-funroll-loops`, `-fno-math-errno`:** no measurable effect.
+- **Batching problems in lockstep:** not attempted. NEON holds two doubles, and the remaining time is a dependency chain within each solve rather than arithmetic throughput.
