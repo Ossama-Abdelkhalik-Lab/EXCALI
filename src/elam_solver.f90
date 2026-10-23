@@ -66,6 +66,10 @@ module elam_solver
          import::c_double
          real(c_double),value,intent(in)::x
       end function
+      pure real(c_double) function log1p_c(x) bind(c,name='log1p')
+         import::c_double
+         real(c_double),value,intent(in)::x
+      end function
    end interface
 
 contains
@@ -82,8 +86,12 @@ contains
       if(.not.all(ieee_is_finite(r1)).or..not.all(ieee_is_finite(r2)))return
       if(.not.ieee_is_finite(mu).or..not.ieee_is_finite(tof).or.mu<=0.or.tof<=0)return
       sc=max(norm2(r1),norm2(r2));if(sc<=0.or..not.ieee_is_finite(sc))return
-      tt=exp(log(tof)+.5_dp*log(mu)-1.5_dp*log(sc))
-      vscale=exp(.5_dp*(log(mu)-log(sc)))
+      vscale=sqrt(mu/sc);tt=tof*vscale/sc
+      if(.not.(vscale>tiny(sc).and.vscale<huge(sc)).or..not.(tt>tiny(sc).and.tt<huge(sc)))then
+         ! Extreme units: scale through logarithms.
+         tt=exp(log(tof)+.5_dp*log(mu)-1.5_dp*log(sc))
+         vscale=exp(.5_dp*(log(mu)-log(sc)))
+      endif
       if(.not.ieee_is_finite(tt).or..not.ieee_is_finite(vscale).or.tt<=0.or.vscale<=0)return
       call elam_one(r1/sc,r2/sc,tt,direction,v1,v2,status,half,nrev,branch,plane_normal)
       if(status==0.or.status==1)then
@@ -98,7 +106,7 @@ contains
    integer,intent(out)          :: status,half
    integer,optional,intent(in)  :: nrev,branch
    real(dp),optional,intent(in) :: plane_normal(3)
-   real(dp) :: scale,rn1,rn2,e1(3),e2(3),h(3),hn,t1v(3),t2v(3),cs,ss,p,q,a,b,y0,yend, &
+   real(dp) :: scale,rn1,rn2,e1(3),e2(3),h(3),hn,t1v(3),t2v(3),cs,ss,p,q,a,b,y0,yend,ypi, &
                t,tp,tv2,x,lo,hi,phi,sig,tmin,d(0:3),f(0:3),k0,kpi,c,s,y,dc,ratio, &
                vr1,vr2,vt1,vt2,wb,psi,yy,sw,dt,hs,hc
    integer  :: m,br,k,it
@@ -137,8 +145,10 @@ contains
    t1v=cross(h,e1);t2v=cross(h,e2)
    p=sqrt(rn1*rn2);a=direction*sqrt2*p*cs;b=sqrt2*a
    q=(rn1-rn2)/(sqrt(rn1)+sqrt(rn2))
-   yend=q*q+2*p*ss*ss/(1+cs)                  ! y at v=pi (elliptic, any direction)
+   ! y(v)=y0+2b*sin(v/2)**2 (b>=0) or yend-2b*cos(v/2)**2 (b<0); ypi=y(pi).
+   yend=q*q+2*p*ss*ss/(1+cs)
    y0=yend;if(direction<0)y0=q*q+2*p*(1+cs)   ! y at v=0
+   ypi=yend;if(b>=0)ypi=y0+2*b
    t=tof/(scale*sqrt(scale))
    status=-4
 
@@ -152,26 +162,26 @@ contains
       elseif(t>tp)then
          ! Ellipse: cubic Hermite for v**2 in phi=(tp/t)**(1/3), between
          ! v**2=(t-tp)/tv2 at phi=1 and pi-v=phi*(K/tp)**(1/3) at phi=0,
-         ! with the exact upper pole T ~ pi*yend**1.5/(sqrt2*(pi-v)**3).
+         ! with the exact upper pole T ~ pi*y(pi)**1.5/(sqrt2*(pi-v)**3).
          phi=rcbrt(tp/t)
-         x=hermite(phi,pi*pi,-2*pi*sqrt(yend)*rcbrt(pi/sqrt2/tp),0._dp,-3*tp/tv2)
+         x=hermite(phi,pi*pi,-2*pi*sqrt(ypi)*rcbrt(pi/sqrt2/tp),0._dp,-3*tp/tv2)
          if(.not.(x>0))x=(t-tp)/tv2         ! model undershoot: parabolic limit
          x=min(sqrt(x),pi*(1-1e-3_dp))
          if(x>.75_dp*pi)then
-            ! Near the pole use its asymptote in d=pi-v with y~yend-b*d**2/2:
+            ! Near the pole use its asymptote in d=pi-v with y~y(pi)-b*d**2/2:
             ! T ~ pi*y**1.5/(sqrt2*d**3)+a*sqrt(y), so y/d**2 = Q, solved for d.
-            p=t-a*sqrt(yend)
+            p=t-a*sqrt(ypi)
             if(p>0)then
                p=rcbrt(sqrt2*p/pi)**2+b/2
-               if(p>0)x=pi-min(sqrt(yend/p),pi/4)
+               if(p>0)x=pi-min(sqrt(ypi/p),pi/4)
             endif
             ! Long way with y_end<<|b|: T plateaus at ~pi*|b|**1.5/4 before
             ! the pole. Below it, cubic Hermite for v**2 in T between the
             ! parabola (slope 1/tv2) and v=pi (dT/dv=|b|**1.5/2).
             if(x>.75_dp*pi.and.b<0)then
-               p=pi*(-b)**1.5_dp/4
+               p=pi*(-b)*sqrt(-b)/4
                if(t<p.and.p>tp)then
-                  x=hermite((t-tp)/(p-tp),0._dp,(p-tp)/tv2,pi*pi,(p-tp)*4*pi/(-b)**1.5_dp)
+                  x=hermite((t-tp)/(p-tp),0._dp,(p-tp)/tv2,pi*pi,(p-tp)*4*pi/((-b)*sqrt(-b)))
                   x=min(sqrt(max(x,0._dp)),pi*(1-1e-3_dp))
                endif
             endif
@@ -180,8 +190,9 @@ contains
          ! Hyperbola in w=sqrt(-z)/2: w**2=(tp-t)/tv2 near the parabola.
          k=-1;hi=huge(hi)
          if(b>0)then
-            ! Short way: T -> 0 at the branch point y(wb)=0.
-            wb=2*asinh(sqrt(y0/(2*b)));hi=wb
+            ! Short way: T -> 0 at the branch point y(wb)=0, wb=2*asinh(s).
+            sw=sqrt(y0/(2*b));dt=sqrt(1+sw*sw)
+            wb=2*log1p_c(sw+sw*sw/(1+dt));hi=wb
             if(t<0.1_dp*tp)then
                ! Newton in Y=sqrt(y): T=Y*(Y**2*F+a) with the exact
                ! w(Y)=2*asinh(sqrt((y0-Y**2)/(2b))). Either term of
@@ -196,15 +207,15 @@ contains
             else
                ! Cubic Hermite for w**2 in (t/tp)**2 between the parabola and
                ! wb, where T**2 ~ a**2*y has slope -a**2*b*sinh(wb).
-               x=hermite((t/tp)**2,wb*wb,-2*wb*tp*tp/(a*a*b*sinh(wb)),0._dp,-tp/(2*tv2))
+               x=hermite((t/tp)**2,wb*wb,-wb*tp*tp/(a*a*b*sw*dt),0._dp,-tp/(2*tv2))
                if(.not.(x>0))x=(tp-t)/tv2
                x=min(sqrt(x),wb*(1-1e-6_dp))
             endif
          else
             ! Long way: T ~ sqrt(-b)*(y0+b)*exp(-w/2) as w -> infinity.
-            psi=log(tp/t)
+            psi=rlog(tp/t)
             x=sqrt(tp*psi/tv2)
-            if(psi>1)x=max(x,2*log(sqrt(-b)*(y0+b)/t))
+            if(psi>1)x=max(x,2*rlog(sqrt(-b)*(y0+b)/t))
          endif
       endif
    else
@@ -219,11 +230,7 @@ contains
       ! off by ~0.15/m. Halley leaves at most ~12*step**3 in v and ~150*
       ! step**4 relative in tmin, so it stops once tmin decides feasibility
       ! and locates the minimum well inside the distance to the root.
-      if(b>=0)then
-         x=acos(b/(y0+b+sqrt(y0*(y0+2*b))))
-      else
-         x=acos(b/(yend-b+sqrt((yend-2*b)*yend)))
-      endif
+      x=acos(b/(y0+b+sqrt(y0*ypi)))
       do it=1,20
          call time_derivs(x,1,m,y0,yend,a,b,d)
          p=-2*d(1)*d(2)/(2*d(2)**2-d(1)*d(3))
@@ -254,7 +261,7 @@ contains
       ! minimum (v*-v ~ sqrt(6*tmin/T'')*sig) and the pole T ~ K/v**3 at sig=1.
       p=tmin/t;sig=rcbrt(p)
       sig=sqrt(max((1-p)/(1+sig+sig*sig),0._dp))   ! 1-p**(1/3) without cancellation
-      k0=y0*sqrt(y0)*m*pi/sqrt2;kpi=yend*sqrt(yend)*(m+1)*pi/sqrt2
+      k0=y0*sqrt(y0)*m*pi/sqrt2;kpi=ypi*sqrt(ypi)*(m+1)*pi/sqrt2
       ! Near a pole the asymptote with y quadratic in the pole distance d,
       ! T ~ n*pi*y**1.5/(sqrt2*d**3)+a*sqrt(y), y ~ y_p+b*d**2/2 (v=0) or
       ! y_p-b*d**2/2 (v=pi), gives y/d**2 = Q in closed form; it also covers
@@ -273,11 +280,11 @@ contains
       else
          lo=x
          x=pi-hermite(sig,pi-x,-sqrt(6*tmin/d(2)),0._dp,-2*rcbrt(kpi/tmin))
-         p=t-a*sqrt(yend)
+         p=t-a*sqrt(ypi)
          if(p>0.and.pi-x<.02_dp*(pi-lo))then
             p=rcbrt(sqrt2*p/((m+1)*pi))**2+b/2
             if(p>0)then
-               if(sqrt(yend/p)<(pi-lo)/2)x=pi-sqrt(yend/p)
+               if(sqrt(ypi/p)<(pi-lo)/2)x=pi-sqrt(ypi/p)
             endif
          endif
       endif
@@ -492,10 +499,10 @@ contains
             if(kind1==1.or.(kind1==2.and.m>0))el=min(el,.9_dp*(pi-c))
             clamped=el-clamped
             if(.not.(el>0))return
-            kr=1-exponent(el)
+            kr=kexp(el)
             if(kr>kmax)return
             call rect_ratio(kind1,c,hs,hc,kr,.true.,y0,yend,a,b,t,m,dd,de,sc)
-            el=.5_dp**kr
+            el=pow2m(kr)
             if(abs(dd)<.8_dp*el.and.de<.1_dp*el.and.sc)then
                c=c+dd;call rotate(kind1,c,dd/2,hs,hc);exit
             endif
@@ -535,7 +542,7 @@ contains
             rr=reach(kind1,c,beta,eta,bim)
             el=min(rr/16,max(16*de,1e-7_dp*rr))
             if(outside)el=min(rr/16,max(16*de,1e-4_dp*rr))
-            kr=1-exponent(el)
+            kr=kexp(el)
             if(kr>kmax)return
             ! 3 nodes suffice far inside R; otherwise use the 8-node rule.
             if(.not.trig.and.kind1>0)then
@@ -544,7 +551,7 @@ contains
                hs=sinh(c/2);hc=cosh(c/2);trig=.true.
             endif
             call rect_ratio(kind1,c,hs,hc,kr,el>rr/1024,y0,yend,a,b,t,m,dd,de,sc)
-            el=.5_dp**kr
+            el=pow2m(kr)
             if(.not.(abs(dd)<.8_dp*el.and.de<1e-3_dp*el.and.sc))return
             c=c+dd;call rotate(kind1,c,dd/2,hs,hc)
          endif
@@ -593,7 +600,7 @@ contains
             elseif(bim>=0)then
                rr=abs(c-bim*bim)
             elseif(b<0)then
-               rr=abs(c-cmplx(pi,eta,dp)**2)
+               rr=sqrt((c-pi*pi+eta*eta)**2+(2*pi*eta)**2)
             endif
             rr=min(rr,.4_dp)
          ! Near a pole of T (v=pi; also v=0 for m>0) T~K/d**3, so T=t has two
@@ -729,7 +736,7 @@ contains
       real(dp)::el,q0,q1,q2,fa,fb,x,sh,ch,sn,cn,rs,yv,y1,ff,ff1,q,g,g1,ser,ser1,pk,y00,ab,mt,sg
       integer::np,j,n
       logical::lw,us
-      el=.5_dp**kr
+      el=pow2m(kr)
       if(eight)then
          np=n1+2;uu=u8;wq=w8
          if(kind1<0)then
@@ -946,6 +953,17 @@ contains
    d(2)=q2*p+2*q1*p1+q*p2
    d(3)=q3*p+3*q2*p1+3*q1*p2+q*p3
    end subroutine time_derivs
+
+   ! 2**(-k) and 1-exponent(x) (x>0) from the bit pattern, without calls.
+   elemental real(dp) function pow2m(k) result(y)
+      integer,intent(in)::k
+      y=transfer(shiftl(int(1023-k,int64),52),y)
+   end function
+
+   elemental integer function kexp(x) result(k)
+      real(dp),intent(in)::x
+      k=1023-int(shiftr(transfer(x,0_int64),52))
+   end function
 
    ! asinh(s), s>=0, to ~2e-5 for singularity distances: series below 1/2,
    ! else log(s+sqrt(1+s**2)) with a fast logarithm.
