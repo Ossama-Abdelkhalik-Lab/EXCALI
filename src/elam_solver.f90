@@ -35,26 +35,21 @@ module elam_solver
    real(dp),parameter :: g3x(3)=[0._dp,.7745966692414834_dp,1._dp],g3w(2)=[8._dp/9,5._dp/9]
    ! Full node lists (nodes, then the endpoints +1,-1) with their weights,
    ! and cos/sin (cosh/sinh) of the half offsets L*u/2 for each L=2**(-k).
+   ! The tables are initialized read-only module data, not parameters:
+   ! some gfortran versions copy a whole parameter array to the stack when
+   ! it is indexed at run time.
    real(dp),parameter :: u8(n1+2)=[g8x(1:h1),-g8x(1:h1),1._dp,-1._dp],w8(n1+2)=[g8w,g8w,0._dp,0._dp]
    real(dp),parameter :: u3(5)=[0._dp,g3x(2),-g3x(2),1._dp,-1._dp],w3(5)=[g3w(1),g3w(2),g3w(2),0._dp,0._dp]
-   real(dp),parameter :: c8f(n1+2,0:kmax)=reshape([((cos(.5_dp**(k_+1)*u8(j_)),j_=1,n1+2),k_=0,kmax)],[n1+2,kmax+1])
-   real(dp),parameter :: s8f(n1+2,0:kmax)=reshape([((sin(.5_dp**(k_+1)*u8(j_)),j_=1,n1+2),k_=0,kmax)],[n1+2,kmax+1])
-   real(dp),parameter :: ch8f(n1+2,0:kmax)=reshape([((cosh(.5_dp**(k_+1)*u8(j_)),j_=1,n1+2),k_=0,kmax)],[n1+2,kmax+1])
-   real(dp),parameter :: sh8f(n1+2,0:kmax)=reshape([((sinh(.5_dp**(k_+1)*u8(j_)),j_=1,n1+2),k_=0,kmax)],[n1+2,kmax+1])
-   real(dp),parameter :: c3f(5,0:kmax)=reshape([((cos(.5_dp**(k_+1)*u3(j_)),j_=1,5),k_=0,kmax)],[5,kmax+1])
-   real(dp),parameter :: s3f(5,0:kmax)=reshape([((sin(.5_dp**(k_+1)*u3(j_)),j_=1,5),k_=0,kmax)],[5,kmax+1])
-   real(dp),parameter :: ch3f(5,0:kmax)=reshape([((cosh(.5_dp**(k_+1)*u3(j_)),j_=1,5),k_=0,kmax)],[5,kmax+1])
-   real(dp),parameter :: sh3f(5,0:kmax)=reshape([((sinh(.5_dp**(k_+1)*u3(j_)),j_=1,5),k_=0,kmax)],[5,kmax+1])
+   real(dp),protected :: c8f(n1+2,0:kmax)=reshape([((cos(.5_dp**(k_+1)*u8(j_)),j_=1,n1+2),k_=0,kmax)],[n1+2,kmax+1])
+   real(dp),protected :: s8f(n1+2,0:kmax)=reshape([((sin(.5_dp**(k_+1)*u8(j_)),j_=1,n1+2),k_=0,kmax)],[n1+2,kmax+1])
+   real(dp),protected :: ch8f(n1+2,0:kmax)=reshape([((cosh(.5_dp**(k_+1)*u8(j_)),j_=1,n1+2),k_=0,kmax)],[n1+2,kmax+1])
+   real(dp),protected :: sh8f(n1+2,0:kmax)=reshape([((sinh(.5_dp**(k_+1)*u8(j_)),j_=1,n1+2),k_=0,kmax)],[n1+2,kmax+1])
+   real(dp),protected :: c3f(5,0:kmax)=reshape([((cos(.5_dp**(k_+1)*u3(j_)),j_=1,5),k_=0,kmax)],[5,kmax+1])
+   real(dp),protected :: s3f(5,0:kmax)=reshape([((sin(.5_dp**(k_+1)*u3(j_)),j_=1,5),k_=0,kmax)],[5,kmax+1])
+   real(dp),protected :: ch3f(5,0:kmax)=reshape([((cosh(.5_dp**(k_+1)*u3(j_)),j_=1,5),k_=0,kmax)],[5,kmax+1])
+   real(dp),protected :: sh3f(5,0:kmax)=reshape([((sinh(.5_dp**(k_+1)*u3(j_)),j_=1,5),k_=0,kmax)],[5,kmax+1])
    ! Reciprocal factorials 1/j! (constant multiplies, not divisions).
    real(dp),parameter :: rf(14)=[(1/gamma(j_+1._dp),j_=1,14)]
-   real(dp),parameter :: c8(h1+1,0:kmax)=reshape([((cos(.5_dp**(k_+1)*g8x(j_)),j_=1,h1+1),k_=0,kmax)],[h1+1,kmax+1])
-   real(dp),parameter :: s8(h1+1,0:kmax)=reshape([((sin(.5_dp**(k_+1)*g8x(j_)),j_=1,h1+1),k_=0,kmax)],[h1+1,kmax+1])
-   real(dp),parameter :: ch8(h1+1,0:kmax)=reshape([((cosh(.5_dp**(k_+1)*g8x(j_)),j_=1,h1+1),k_=0,kmax)],[h1+1,kmax+1])
-   real(dp),parameter :: sh8(h1+1,0:kmax)=reshape([((sinh(.5_dp**(k_+1)*g8x(j_)),j_=1,h1+1),k_=0,kmax)],[h1+1,kmax+1])
-   real(dp),parameter :: c3(3,0:kmax)=reshape([((cos(.5_dp**(k_+1)*g3x(j_)),j_=1,3),k_=0,kmax)],[3,kmax+1])
-   real(dp),parameter :: s3(3,0:kmax)=reshape([((sin(.5_dp**(k_+1)*g3x(j_)),j_=1,3),k_=0,kmax)],[3,kmax+1])
-   real(dp),parameter :: ch3(3,0:kmax)=reshape([((cosh(.5_dp**(k_+1)*g3x(j_)),j_=1,3),k_=0,kmax)],[3,kmax+1])
-   real(dp),parameter :: sh3(3,0:kmax)=reshape([((sinh(.5_dp**(k_+1)*g3x(j_)),j_=1,3),k_=0,kmax)],[3,kmax+1])
    ! (1-cos(v))/X in X=v**2 (highest first), for the near-parabolic coordinate.
    real(dp),parameter :: cser(9)=[1._dp/6402373705728000._dp,-1._dp/20922789888000._dp,1._dp/87178291200._dp, &
       -1._dp/479001600._dp,1._dp/3628800._dp,-1._dp/40320._dp,1._dp/720._dp,-1._dp/24._dp,.5_dp]
