@@ -230,20 +230,22 @@ contains
       ! off by ~0.15/m. Halley leaves at most ~12*step**3 in v and ~150*
       ! step**4 relative in tmin, so it stops once tmin decides feasibility
       ! and locates the minimum well inside the distance to the root.
-      x=acos(b/(y0+b+sqrt(y0*ypi)))
+      ! Half-angle functions follow from cos v, then by angle addition.
+      c=b/(y0+b+sqrt(y0*ypi))
+      x=acos(c);hs=sqrt((1-c)/2);hc=sqrt((1+c)/2)
       do it=1,20
-         call time_derivs(x,1,m,y0,yend,a,b,d)
+         call time_derivs(x,1,m,y0,yend,a,b,d,hs,hc)
          p=-2*d(1)*d(2)/(2*d(2)**2-d(1)*d(3))
          dt=min(max(x+p,x/2),(x+pi)/2)-x
          ! T and T'' at the step from the Taylor data (error O(step**4)).
          tmin=d(0)+dt*(d(1)+dt*(d(2)/2+dt*d(3)/6))
-         x=x+dt
+         x=x+dt;call rotate(1,x,dt/2,hs,hc)
          ! A step below 1e-3 leaves ~1e-8 in v, and tmin is quadratic in it.
          if(abs(dt)<=1e-3_dp)exit
-         if(abs(dt)<.1_dp.and.tmin>0)then
-            p=t-tmin;s=1200*tmin*dt**4
+         if(abs(dt)<.3_dp.and.tmin>0)then
+            p=t-tmin;s=300*tmin*dt**4
             if(p<-s)exit
-            if(p>s.and.12*abs(dt)**3<sqrt(2*p/max(d(2),tiny(p)))/32)exit
+            if(p>s.and.12*abs(dt)**3<sqrt(2*p/max(d(2),tiny(p)))/8)exit
          endif
       enddo
       ! T'' at the minimum; after a larger early-exit step near the pole the
@@ -288,7 +290,15 @@ contains
             endif
          endif
       endif
-      x=min(max(x,lo+(hi-lo)*1e-3_dp),hi-(hi-lo)*1e-3_dp)
+      if(t-tmin<1e-2_dp*tmin)then
+         ! Close to the minimum, invert t-tmin = T''/2*e**2 + T'''/6*e**3 by
+         ! series reversion; the root may lie far inside the bracket margin.
+         p=sqrt(2*(t-tmin)/d(2))
+         x=merge(hi,lo,br<0)+merge(-p,p,br<0)-d(3)/(6*d(2))*p*p
+         x=min(max(x,lo+p/2),hi-p/2)
+      else
+         x=min(max(x,lo+(hi-lo)*1e-3_dp),hi-(hi-lo)*1e-3_dp)
+      endif
    endif
 
    ! Store distance from the upper pole directly on near-full-period arcs.
@@ -914,17 +924,24 @@ contains
    end subroutine f_derivs
 
    !> T and its first three derivatives in the anomaly coordinate x (k as above).
-   pure subroutine time_derivs(x,k,m,y0,yend,a,b,d)
+   pure subroutine time_derivs(x,k,m,y0,yend,a,b,d,hsx,hcx)
    real(dp),intent(in)  :: x,y0,yend,a,b
    integer,intent(in)   :: k,m
    real(dp),intent(out) :: d(0:3)
+   real(dp),optional,intent(in) :: hsx,hcx   ! sin/cos(x/2) if known (k>0)
    real(dp) :: sh,ch,s,c,y,y1,y2,y3,f(0:3),q,q1,q2,q3,p,p1,p2,p3
+   if(k>0)then
+      if(present(hsx))then
+         sh=hsx;ch=hcx
+      else
+         sh=sin(x/2);ch=cos(x/2)
+      endif
+      c=(ch-sh)*(ch+sh)
+   endif
    if(k==2)then
-      sh=sin(x/2);ch=cos(x/2);c=(ch-sh)*(ch+sh)
       y=y0+2*b*ch*ch
       if(b<0)y=yend-2*b*sh*sh
    elseif(k>0)then
-      sh=sin(x/2);ch=cos(x/2);c=(ch-sh)*(ch+sh)
       if(b>=0)then
          y=y0+2*b*sh*sh
       else
