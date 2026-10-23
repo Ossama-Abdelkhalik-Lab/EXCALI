@@ -164,4 +164,24 @@ Also checked in Docker (`gcc:14` image, GNU Fortran 14.4, glibc):
 - **95,748 selected cases on Linux aarch64:** the errors are identical to macOS.
 - **95,748 selected cases on Linux x86-64:** no case is worse than 4× the previous eLam on that platform, and every group maximum is unchanged from it. In the near-180° group, both versions differ from their macOS results in 47 cases, with a maximum of 1.0e-10 against 6.9e-11. That group sits at the input-conditioning floor, where x86-64's different rounding (no fused multiply-add by default) and different libm show.
 
-All the timings in this file are from one Apple M1 Pro. Native x86-64 timings have not been measured.
+Every timing above is from one Apple M1 Pro.
+
+### Native Linux x86-64 (GitHub Actions)
+
+The comparison repository's `native` workflow runs `benchmark_mixed` (2,000 cases per class, five repetitions) on an `ubuntu-latest` runner: x86-64, GNU Fortran 13.3, the same `-O3 -fno-fast-math` flags. All solvers had zero failures. Shared runners are noisy, so the ratios matter more than the absolute times.
+
+| Class | ivLam ns | eLam ns | eLam / ivLam | ivLam max error | eLam max error |
+|---|---:|---:|---:|---:|---:|
+| circular_short | 264 | 287 | 1.09 | 3.5e-15 | 1.8e-15 |
+| elliptic_short | 264 | 321 | 1.22 | 1.5e-13 | 4.3e-14 |
+| elliptic_long | 255 | 295 | 1.16 | 2.9e-13 | 4.1e-14 |
+| high_ecc | 259 | 346 | 1.34 | 2.1e-12 | 1.9e-14 |
+| hyperbolic | 271 | 379 | 1.40 | 3.1e-14 | 7.8e-15 |
+| near_parabolic | 236 | 328 | 1.39 | 1.6e-15 | 4.9e-15 |
+| multirev_1 | 331 | 434 | 1.31 | 8.1e-13 | 6.7e-14 |
+| multirev_2_3 | 330 | 391 | 1.19 | 5.0e-13 | 2.0e-13 |
+| multirev_long | 332 | 391 | 1.18 | 5.4e-13 | 4.1e-13 |
+| infeasible_m | 93 | 57 | 0.61 | — | — |
+| hyperbolic_fast | 280 | 301 | 1.07 | 4.7e-15 | 1.0e-14 |
+
+So eLam's speed relative to ivLam depends on the platform. It is 0.76–1.10× on Apple silicon with macOS's libm, and 1.07–1.40× on this x86-64 runner. Its accuracy advantage holds on both. The same pattern appeared on Linux aarch64 in Docker on the M1: glibc's `sinh`/`cosh`, `cbrt` and `asinh` took about twice Apple's time, and the rectangle kernel ran more slowly. Those Docker timings ran inside a VM, though, so they are only indicative.
