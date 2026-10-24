@@ -68,7 +68,7 @@ test_elam_comparison;
 test_comparison;
 ```
 
-Native `benchmark_mixed` retains independent quad-precision orbital truth and per-regime failure counts for IDs 0, 1, 6, 7, 8. `benchmark_native_solvers` exercises complete scalar/batch gateway paths on circular truth. Rejected/failed rows do not justify speed claims. See the CSV files accompanying this report for the final local measurements.
+Native `benchmark_mixed` retains independent quad-precision orbital truth and per-regime failure counts for confluentcontour, Russell, both preserved originals and eLam (comparison IDs 0–4 since 2026-10-24). `benchmark_native_solvers` exercises complete scalar/batch gateway paths on circular truth. Rejected/failed rows do not justify speed claims. See the CSV files accompanying this report for the final local measurements.
 
 ## Zero-height rectangle update — 2026-10-22
 
@@ -193,3 +193,22 @@ A follow-up profile on one x86-64 runner compared the previous and current eLam 
 The baseline x86-64 target used by plain `-O3` has no fused multiply-add, which eLam's polynomial evaluations rely on more than ivLam does.
 
 So eLam's speed relative to ivLam depends on the platform. It is 0.76–1.10× on Apple silicon with macOS's libm, and 1.07–1.40× on this x86-64 runner. Its accuracy advantage holds on both. The same pattern appeared on Linux aarch64 in Docker on the M1: glibc's `sinh`/`cosh`, `cbrt` and `asinh` took about twice Apple's time, and the rectangle kernel ran more slowly. Those Docker timings ran inside a VM, though, so they are only indicative.
+
+## Contour-only safeguards — 2026-10-24
+
+The two derivative-based iterations left in the root solve were replaced with zero-height rectangles:
+
+- **Starter misses** used to fall back to bracketed Newton/bisection, whose first step was a finite complex rectangle. They now continue as a *bracketed contour*. Every estimate is a zero-height rectangle ratio centred on the current point. `T` is monotone on the branch, so two pieces of information shrink the starter's bracket: the sign of `T - t` at the centre, and the rectangle's own sign test (a sign change confines the root to the rectangle; none moves the bracket edge past it). An estimate outside the bracket is replaced by its midpoint. A rectangle that leaves the domain (for example past the hyperbolic branch point) returns a non-finite ratio and only halves `L`.
+- **Very short hyperbolas** (`t < 0.1 t_p`) solved `T(Y) = t` in `Y = sqrt(y)` by Newton with a complex-step derivative. They now use the same bracketed contour in `Y`, with the closed-form `dT/dY = 3Y^2 F + a - 2Y^4 F'(w)/(b sinh w)`. The anomaly coordinate `w` cannot replace `Y` there: in a stress test of 20,000 hyperbolas with `e` from 30 to 10,000, 72% of the cases failed in `w` because the root sits within rounding of the branch point.
+
+The finite complex rectangle and the complex time function are gone. eLam no longer uses complex arithmetic anywhere. The only derivative-based iteration left is the Halley search for the multi-revolution minimum time (one or two steps).
+
+Removing the safeguard altogether is not possible without failures. With it disabled, 0.02–0.77% of each class of `benchmark_mixed` return status `-4` (20,000 cases per class, eight seeds). In most of these the starter is far from the root and the reach-limited interval never contains it (for example a long-way hyperbola whose `T - t` stays near +0.31 across the whole interval), or the root sits beside a pole of `T`.
+
+**Checks:**
+
+- `benchmark_mixed` with 20,000 cases per class under eight seeds (1.76 million solves): zero failures. Each class maximum matches the previous Newton fallback; the rescued cases take 3–6 rectangles each.
+- Short-hyperbola stress set, five seeds of 20,000 (75,000 cases on the `Y` path): zero failures, maxima equal to the Newton version (2.4e-14 to 3.2e-14).
+- The full 1,000,000-case elliptic dataset, case by case against the previous build: 999,930 results are bit-identical, no case differs by more than 4×, there are no failures, and the maxima are unchanged (1.2e-13 for 10°–179°, 3.4e-13 below 10°, 8.8e-11 above 179°).
+- Lamberts-Comparison CTests: 24/24 passed. Standalone repository: 3/3 with OpenMP on and off. MATLAB `run_tests` and `test_elam_comparison`: passed; the hard mixed fixture remains 3,004/3,009.
+- `benchmark_mixed` speed is unchanged within noise (0.87 times ivLam overall on the M1 Pro).
