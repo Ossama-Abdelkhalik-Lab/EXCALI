@@ -184,4 +184,12 @@ The comparison repository's `native` workflow runs `benchmark_mixed` (2,000 case
 | infeasible_m | 93 | 57 | 0.61 | — | — |
 | hyperbolic_fast | 280 | 301 | 1.07 | 4.7e-15 | 1.0e-14 |
 
+A follow-up profile on one x86-64 runner compared the previous and current eLam in the same job. Computing sinh/cosh from one `exp` (or a Taylor series), and removing redundant divisions and square roots, changed the ratio to ivLam as follows:
+- hyperbolic: 1.41 → 1.31;
+- hyperbolic_fast: 1.07 → 1.00;
+- near_parabolic: 1.39 → 1.35;
+- all classes combined: 1.21 → 1.18.
+
+The baseline x86-64 target used by plain `-O3` has no fused multiply-add, which eLam's polynomial evaluations rely on more than ivLam does.
+
 So eLam's speed relative to ivLam depends on the platform. It is 0.76–1.10× on Apple silicon with macOS's libm, and 1.07–1.40× on this x86-64 runner. Its accuracy advantage holds on both. The same pattern appeared on Linux aarch64 in Docker on the M1: glibc's `sinh`/`cosh`, `cbrt` and `asinh` took about twice Apple's time, and the rectangle kernel ran more slowly. Those Docker timings ran inside a VM, though, so they are only indicative.
