@@ -107,7 +107,7 @@ contains
    real(dp),optional,intent(in) :: plane_normal(3)
    real(dp) :: scale,rn1,rn2,e1(3),e2(3),h(3),hn,t1v(3),t2v(3),cs,ss,p,q,a,b,y0,yend,ypi, &
                t,tp,tv2,x,lo,hi,phi,sig,tmin,d(0:3),f(0:3),k0,kpi,c,s,y,dc,ratio, &
-               vr1,vr2,vt1,vt2,wb,psi,yy,sw,dt,hs,hc
+               vr1,vr2,vt1,vt2,wb,psi,yy,sw,dt,hs,hc,s1,s2
    integer  :: m,br,k,it
    logical :: merged,trig
 
@@ -122,7 +122,13 @@ contains
    ! Normalized entry (elam_solve pre-scales): plain dot products suffice.
    rn1=sqrt(dot_product(r1,r1));rn2=sqrt(dot_product(r2,r2))
    if(.not.(rn1>0.and.rn2>0).or..not.ieee_is_finite(rn1+rn2))return
-   scale=max(rn1,rn2);e1=r1/rn1;e2=r2/rn2;rn1=rn1/scale;rn2=rn2/scale
+   ! Correctly rounded unit vectors; the larger normalized radius is exactly 1.
+   e1=r1/rn1;e2=r2/rn2
+   if(rn1>=rn2)then
+      scale=rn1;rn2=rn2/rn1;rn1=1
+   else
+      scale=rn2;rn1=rn1/rn2;rn2=1
+   endif
    h=cross(e1,e2);hn=sqrt(dot_product(h,h))
    status=-2
    if(hn<32*epsilon(hn))then
@@ -142,8 +148,9 @@ contains
    t1v=e1+e2;t2v=e2-e1
    cs=sqrt(dot_product(t1v,t1v))/2;ss=sqrt(dot_product(t2v,t2v))/2 ! |cos(theta/2)|, |sin(theta/2)|
    t1v=cross(h,e1);t2v=cross(h,e2)
-   p=sqrt(rn1*rn2);a=direction*sqrt2*p*cs;b=sqrt2*a
-   q=(rn1-rn2)/(sqrt(rn1)+sqrt(rn2))
+   s1=sqrt(rn1);s2=sqrt(rn2)
+   p=s1*s2;a=direction*sqrt2*p*cs;b=sqrt2*a
+   q=(rn1-rn2)/(s1+s2)
    ! y(v)=y0+2b*sin(v/2)**2 (b>=0) or yend-2b*cos(v/2)**2 (b<0); ypi=y(pi).
    yend=q*q+2*p*ss*ss/(1+cs)
    y0=yend;if(direction<0)y0=q*q+2*p*(1+cs)   ! y at v=0
@@ -155,7 +162,7 @@ contains
    k=1;lo=0;hi=pi;yy=-1
    if(m==0)then
       tp=sqrt(y0)*(y0*sqrt2/3+a)                                 ! parabolic time
-      tv2=y0*sqrt(y0)/(5*sqrt2)+b*(sqrt(y0)/sqrt2+a/(2*sqrt(y0)))/2 ! dT/d(v**2) at 0
+      tv2=y0*sqrt(y0)*(rsqrt2/5)+b*(sqrt(y0)*rsqrt2+a/(2*sqrt(y0)))/2 ! dT/d(v**2) at 0
       if(abs(t-tp)<=4*epsilon(t)*tp)then
          x=0                                                     ! parabola
       elseif(t>tp)then
@@ -163,7 +170,7 @@ contains
          ! v**2=(t-tp)/tv2 at phi=1 and pi-v=phi*(K/tp)**(1/3) at phi=0,
          ! with the exact upper pole T ~ pi*y(pi)**1.5/(sqrt2*(pi-v)**3).
          phi=rcbrt(tp/t)
-         x=hermite(phi,pi*pi,-2*pi*sqrt(ypi)*rcbrt(pi/sqrt2/tp),0._dp,-3*tp/tv2)
+         x=hermite(phi,pi*pi,-2*pi*sqrt(ypi)*rcbrt((pi*rsqrt2)/tp),0._dp,-3*tp/tv2)
          if(.not.(x>0))x=(t-tp)/tv2         ! model undershoot: parabolic limit
          x=min(sqrt(x),pi*(1-1e-3_dp))
          if(x>.75_dp*pi)then
@@ -326,7 +333,7 @@ contains
       elseif(k>0)then
          sw=sin(x/2);dt=cos(x/2)
       else
-         sw=sinh(x/2);dt=cosh(x/2)
+         call shch(x/2,sw,dt)
       endif
       if(k>0)then
          c=(dt-sw)*(dt+sw);s=(2*sw*dt)**2
@@ -349,11 +356,13 @@ contains
       dc=p*cs-c
       if(p*cs*c>0.and.abs(p*cs+c)>0.5_dp)dc=(s-ss*ss)/(p*cs+c)
    endif
-   ratio=sqrt(rn2/rn1)
+   ! With s1=sqrt(r1), s2=sqrt(r2) and q=s1-s2 (computed above without
+   ! cancellation): (r2-r1)/(r1*(s2/s1+1)) = -q/s1, and vt uses s2/s1.
    y=sqrt2/sqrt(y*scale)                     ! common factor sqrt(2/(y*scale))
-   vr1=y*(dc+p*cs*(rn2-rn1)/(rn1*(ratio+1)))
-   vr2=-y*(dc+p*cs*(rn1-rn2)/(rn2*(1/ratio+1)))
-   vt1=y*ratio*ss;vt2=y*ss/ratio
+   ratio=1/s1;dc=y*dc;p=y*p*cs*q;s=y*ss
+   vr1=dc-p*ratio;vt1=s*s2*ratio
+   ratio=1/s2
+   vr2=-(dc+p*ratio);vt2=s*s1*ratio
    v1=vr1*e1+vt1*t1v
    v2=vr2*e2+vt2*t2v
    status=0
@@ -499,7 +508,7 @@ contains
             if(.not.trig.and.kind1>0)then
                hs=sin(c/2);hc=cos(c/2);trig=.true.
             elseif(.not.trig.and.kind1<0)then
-               hs=sinh(c/2);hc=cosh(c/2);trig=.true.
+               call shch(c/2,hs,hc);trig=.true.
             endif
             rr=reach(kind1,c,beta,eta,bim)
             el=min(1._dp,rr/grow);clamped=el
@@ -558,7 +567,7 @@ contains
             if(.not.trig.and.kind1>0)then
                hs=sin(c/2);hc=cos(c/2);trig=.true.
             elseif(.not.trig.and.kind1<0)then
-               hs=sinh(c/2);hc=cosh(c/2);trig=.true.
+               call shch(c/2,hs,hc);trig=.true.
             endif
             call rect_ratio(kind1,c,hs,hc,kr,el>rr/1024,y0,yend,a,b,t,m,dd,de,sc)
             el=pow2m(kr)
@@ -872,7 +881,7 @@ contains
       elseif(kind1>0)then
          s=sin(h);c=cos(h)
       else
-         s=sinh(h);c=cosh(h)
+         call shch(h,s,c)
       endif
       q=hs;r=hc
       hs=q*c+hc*s
@@ -885,7 +894,7 @@ contains
          if(kind1>0)then
             hs=sin(x/2);hc=cos(x/2)
          else
-            hs=sinh(x/2);hc=cosh(x/2)
+            call shch(x/2,hs,hc)
          endif
       endif
    end subroutine
@@ -925,7 +934,7 @@ contains
       elseif(k>0)then
          s=sin(x);c=cos(x)
       else
-         s=sinh(x);c=cosh(x)
+         call shch(x,s,c)
       endif
       r=1/s
       f(0)=k*(x+m*pi-s*c)/sqrt2*r**3
@@ -960,7 +969,7 @@ contains
          y=yend-2*b*ch*ch
       endif
    else
-      sh=sinh(x/2);ch=cosh(x/2);c=1+2*sh*sh
+      call shch(x/2,sh,ch);c=1+2*sh*sh
       y=y0-2*b*sh*sh
    endif
    s=2*sh*ch
@@ -982,6 +991,25 @@ contains
    d(2)=q2*p+2*q1*p1+q*p2
    d(3)=q3*p+3*q2*p1+3*q1*p2+q*p3
    end subroutine time_derivs
+
+   ! sinh and cosh together: Taylor series below 1/2 (exact to rounding),
+   ! otherwise one exp. A separate sinh/cosh pair costs about twice as much
+   ! in some libms (glibc).
+   elemental subroutine shch(x,s,c)
+      real(dp),intent(in)::x
+      real(dp),intent(out)::s,c
+      real(dp)::q,e
+      if(abs(x)<.5_dp)then
+         q=x*x
+         s=x*(1+q*(rf(3)+q*(rf(5)+q*(rf(7)+q*(rf(9)+q*(rf(11)+q*rf(13)))))))
+         c=1+q*(rf(2)+q*(rf(4)+q*(rf(6)+q*(rf(8)+q*(rf(10)+q*(rf(12)+q*rf(14)))))))
+      elseif(abs(x)<700)then
+         e=exp(x);q=1/e
+         s=(e-q)/2;c=(e+q)/2
+      else
+         s=sinh(x);c=cosh(x)
+      endif
+   end subroutine
 
    ! 2**(-k) (|k|<1000) and 1-exponent(x) (x>0) from the bit pattern;
    ! gfortran implements the scale/exponent intrinsics as library calls.
