@@ -3,7 +3,7 @@
 ! zero-height limit of that rectangle (real Gauss-Legendre quadrature of
 ! 1/(T-t) and its derivative), applied in one or two fixed stages without a
 ! Newton polish. Geometry, half-anomaly time functions, derivatives and
-! closed-form starters are adapted from this project's contour_simple. No
+! closed-form starters are adapted from ConfluentContour's former contour_simple. No
 ! confluent/Householder root steps and no calls to another Lambert solver.
 module elam_solver
    use iso_fortran_env, only: real64, int64

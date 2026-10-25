@@ -2,7 +2,7 @@
 
 This file records local evidence from Lamberts-Comparison on macOS with GNU Fortran 16.2 and MATLAB R2026b. It is not a claim of global superiority to ivLam or a reproduction of the supplied five-million-case benchmark.
 
-## Completed checks
+## Completed checks (2026-10-22)
 
 - Full native comparison suite: **24/24 CTests passed**.
 - Independent standalone repository: **3/3 tests passed**, with OpenMP enabled and disabled.
@@ -24,31 +24,11 @@ The comparison gate requires both endpoint velocities within `1e-10 + 1e-10*norm
 
 ## Timing interpretation
 
-The numbers in this section and the next were measured before the zero-height rectangle update (see the end of this file). At that time the extension was slower than ivLam on the local mixed benchmark. Original and extended timings must be reported separately.
-
-Original batched adapters include input validation, rotation into individual local transfer planes and rotation of output velocities back to the input frame. Serial and vector variants retain their supplied kernel-specific compiler flags. The common build uses `-O3 -fno-fast-math`; no `-march=native` speed claim is made. Initialization is outside timed regions. Thread counts are matched, and the parallel build is also checked at one thread.
+Original and extended timings must be reported separately. The original batched adapters include input validation, rotation into individual local transfer planes and rotation of output velocities back to the input frame. Serial and vector variants retain their supplied kernel-specific compiler flags. The common build uses `-O3 -fno-fast-math`; no `-march=native` speed claim is made. Initialization is outside timed regions. Thread counts are matched, and the parallel build is also checked at one thread.
 
 The supplied `original/README.txt` contains historical timing and percentile claims from a different dataset and build. Those claims are retained as provenance, not adopted as results of this validation. No five-million-case corpus was supplied in the imported folder.
 
-## Final native measurements
-
-100,000 independent circular transfers; median of five repetitions; nanoseconds per complete solve. All five entries passed all 100,000 cases in each mode.
-
-| Solver | Scalar, 1 thread | Batch, 1 thread | Batch, 4 threads |
-|---|---:|---:|---:|
-| confluentcontour | 236.3 | 134.4 | 36.6 |
-| ivLam | 236.0 | 228.1 | 71.0 |
-| Original Exact serial | 253.3 | 90.4 | 25.3 |
-| Original Exact vector | 269.7 | 94.7 | 25.1 |
-| Extended eLam | 1005.8 | 995.2 | 289.8 |
-
-Thus the originals were about **2.4–2.5x faster in one-thread batches** and **2.8x faster in four-thread batches** on this circular fixture. Their scalar adapters were slower than ivLam. Maximum absolute velocity errors on this fixture were `2.68e-15` for ivLam, `3.16e-15`/`3.76e-15` for the originals and `4.27e-15` for extended eLam; this does not establish superior original accuracy.
-
-The 22,000-case independent mixed benchmark (2,000 per class) produced zero failures for extended eLam, confluentcontour and ivLam, including 2,000 correctly classified infeasible requests. The originals each failed five high-eccentricity cases, with a worst finite relative endpoint error of **0.4079**. They also rejected unsupported hyperbolic/multi-revolution requests and about half the near-parabolic class. Ordinary short-/long-way elliptic classes passed, but the originals' worst long-way relative error (`1.05e-11`) exceeded ivLam's (`3.44e-13`) on this sample. The statement "more accurate than ivLam" is therefore not supported as a general claim.
-
-Extended eLam took roughly **4.2–6.1x** ivLam's time on the feasible mixed transfer classes, and 7.3x for infeasibility classification. Its finite-rectangle method has broader coverage, but speed optimization remains future work rather than a result claimed here.
-
-Raw results: [one-thread batch](circular_batch_1thread.csv), [four-thread batch](circular_batch_4threads.csv), [one-thread scalar](circular_scalar_1thread.csv), [mixed regimes](extended_mixed.csv). [Metadata](benchmark_metadata.json) records sample sizes, statistics, compiler, solver IDs and the comparison base revision. [Source hashes](validated_sources.json) identify the validated eLam implementation. Mixed timings use the minimum of five repeated block timings; the circular table uses medians. Final native timings were run after the task's builds, propagation checks and MATLAB rendering finished.
+On the 22,000-case mixed benchmark (2,000 per class) the preserved originals each failed five high-eccentricity cases, with a worst finite relative endpoint error of 0.4079, and rejected the unsupported hyperbolic and multi-revolution requests and about half the near-parabolic class. Their worst long-way elliptic error (`1.05e-11`) exceeded ivLam's (`3.44e-13`), so "more accurate than ivLam" is not supported as a general claim. Timings of the first finite-rectangle eLam, before the zero-height update below, are superseded and no longer recorded here.
 
 ## Reproduction
 
@@ -68,7 +48,7 @@ test_elam_comparison;
 test_comparison;
 ```
 
-Native `benchmark_mixed` retains independent quad-precision orbital truth and per-regime failure counts for confluentcontour, Russell, both preserved originals and eLam (comparison IDs 0–4 since 2026-10-24). `benchmark_native_solvers` exercises complete scalar/batch gateway paths on circular truth. Rejected/failed rows do not justify speed claims. See the CSV files accompanying this report for the final local measurements.
+Native `benchmark_mixed` retains independent quad-precision orbital truth and per-regime failure counts for confluentcontour, Russell, both preserved originals and eLam (comparison IDs 0–4 since 2026-10-24). `benchmark_native_solvers` exercises complete scalar/batch gateway paths on circular truth. Rejected/failed rows do not justify speed claims.
 
 ## Zero-height rectangle update — 2026-10-22
 
