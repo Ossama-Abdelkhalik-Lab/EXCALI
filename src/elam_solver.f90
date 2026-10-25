@@ -3,7 +3,7 @@
 ! zero-height limit of that rectangle (real Gauss-Legendre quadrature of
 ! 1/(T-t) and its derivative), applied in one or two fixed stages without a
 ! Newton polish. Geometry, half-anomaly time functions, derivatives and
-! closed-form starters are adapted from this project's contour_simple. No
+! closed-form starters are adapted from ConfluentContour's former contour_simple. No
 ! confluent/Householder root steps and no calls to another Lambert solver.
 module elam_solver
    use iso_fortran_env, only: real64, int64
@@ -200,13 +200,13 @@ contains
             sw=sqrt(y0/(2*b));dt=sqrt(1+sw*sw)
             wb=2*log1p_c(sw+sw*sw/(1+dt));hi=wb
             if(t<0.1_dp*tp)then
-               ! Newton in Y=sqrt(y): T=Y*(Y**2*F+a) with the exact
+               ! Solve in Y=sqrt(y): T=Y*(Y**2*F+a) with the exact
                ! w(Y)=2*asinh(sqrt((y0-Y**2)/(2b))). Either term of
                ! T = a*Y + F*Y**3 alone overestimates Y; start from the smaller.
                call f_derivs(wb,-1,0,f)
                yy=min(t/a,rcbrt(t/f(0)),0.9_dp*sqrt(y0))
-               ! A separate thin rectangle in Y=sqrt(y) avoids the
-               ! branch-point cancellation of hyperbolic anomaly space.
+               ! Zero-height rectangles in Y avoid the branch-point
+               ! cancellation of hyperbolic anomaly space.
                lo=0;hi=sqrt(y0)
                if(.not.converge_y())return
                sw=(y0-yy*yy)/(2*b);x=2*asinh(sqrt(sw))
@@ -315,7 +315,7 @@ contains
 
    !======= Root: zero-height thin rectangles =======
    if(x>0.and.yy<0.and..not.merged)then
-      ! Rare starter failures fall back to the safeguarded bracket iteration.
+      ! Rare starter misses continue as a bracketed contour.
       if(.not.contour_root())then
          if(.not.converge())return
       endif
@@ -370,86 +370,6 @@ contains
    if(.not.all(ieee_is_finite(v1)).or..not.all(ieee_is_finite(v2)))status=-4
 
    contains
-
-      ! Full finite upper-half rectangular contour, 8-point Gauss-Legendre
-      ! on the top and one midpoint on each vertical side, as in Exact v2.2.
-      ! The ratio uses the imaginary integrals; lower-half symmetry cancels
-      ! real parts. Centering the numerator avoids loss of root increments.
-      real(dp) function rectangle(center,radius,in_y) result(root)
-         real(dp),intent(in)::center,radius
-         logical,intent(in)::in_y
-         real(dp),parameter::nodes(8)=[-.9602898564975363_dp,-.7966664774136267_dp, &
-            -.5255324099163290_dp,-.1834346424956498_dp,.1834346424956498_dp, &
-             .5255324099163290_dp,.7966664774136267_dp,.9602898564975363_dp]
-         real(dp),parameter::weights(8)=[.1012285362903763_dp,.2223810344533745_dp, &
-            .3137066458778873_dp,.3626837833783620_dp,.3626837833783620_dp, &
-            .3137066458778873_dp,.2223810344533745_dp,.1012285362903763_dp]
-         complex(dp)::z,w,den,num,fn
-         real(dp)::height
-         integer::j
-         den=0;num=0
-         height=min(1e-7_dp,0.01_dp*radius)
-         do j=1,10
-            if(j<=8)then
-               z=cmplx(center-radius*nodes(j),height,dp)
-               w=cmplx(-radius*weights(j),0._dp,dp)
-            elseif(j==9)then
-               z=cmplx(center+radius,height/2,dp);w=cmplx(0._dp,height,dp)
-            else
-               z=cmplx(center-radius,height/2,dp);w=cmplx(0._dp,-height,dp)
-            endif
-            fn=complex_time(z,in_y)-t
-            if(abs(fn)==0)then
-               root=center;return
-            endif
-            w=w/fn;den=den+w;num=num+(z-center)*w
-         enddo
-         root=center
-         if(abs(aimag(den))>tiny(t))root=center+aimag(num)/aimag(den)
-      end function
-
-      complex(dp) function complex_time(z,in_y) result(tt)
-         complex(dp),intent(in)::z
-         logical,intent(in)::in_y
-         complex(dp)::zz,ss1,cc1,yy1,ff,xx1
-         integer::j,kind1
-         zz=z;kind1=k
-         if(in_y)then
-            ! Analytic asinh using its logarithmic identity.
-            xx1=sqrt((y0-z*z)/(2*b))
-            zz=2*log(xx1+sqrt(1+xx1*xx1));kind1=-1
-         endif
-         if(kind1==2)then
-            ss1=sin(zz);cc1=cos(zz)
-            yy1=y0+2*b*cos(zz/2)**2
-            if(b<0)yy1=yend-2*b*sin(zz/2)**2
-         elseif(kind1>0)then
-            ss1=sin(zz);cc1=cos(zz)
-            yy1=y0+2*b*sin(zz/2)**2
-            if(b<0)yy1=yend-2*b*cos(zz/2)**2
-         else
-            ss1=sinh(zz);cc1=cosh(zz);yy1=y0-2*b*sinh(zz/2)**2
-         endif
-         if(kind1==2)then
-            ff=((m+1)*pi-zz+ss1*cc1)/(sqrt2*ss1**3)
-         elseif(m==0.and.abs(zz)<0.3_dp)then
-            xx1=kind1*zz*zz;ff=pser(1)
-            do j=2,10
-               ff=ff*xx1+pser(j)
-            enddo
-            ff=ff/sqrt2
-         else
-            ff=kind1*(zz+m*pi-ss1*cc1)/(sqrt2*ss1**3)
-         endif
-         if(in_y)then
-            tt=z*(z*z*ff+a)
-         elseif(kind1<0.and.b<0.and.abs(zz)>=0.3_dp)then
-            ! Cancel the large asymptotic terms symbolically, not numerically.
-            tt=sqrt(yy1)/sqrt2*(((y0+b)*cc1-b)/ss1**2-yy1*zz/ss1**3)
-         else
-            tt=sqrt(yy1)*(yy1*ff+a)
-         endif
-      end function
 
       ! Root from zero-height thin rectangles; no derivative steps. Stage 1
       ! (8 nodes, half-width L~R/4, R the distance to the nearest singularity
@@ -661,12 +581,17 @@ contains
 
 
 
+      ! Very short hyperbolas: the bracketed contour in Y=sqrt(y), where
+      ! T(Y)=Y*(Y**2*F(w)+a) is increasing and w(Y)=2*asinh(sqrt((y0-Y**2)/(2b)))
+      ! avoids the branch-point cancellation of w. Intervals stay inside
+      ! (0,sqrt(y0)); w=0 at Y=sqrt(y0) is the only nearby singularity.
       logical function converge_y() result(ok)
-         real(dp)::res,der,trial,rad,old
-         integer::j
-         ok=.false.
+         real(dp)::res,trial,el,dd,de,tt,dtt,ft(n1+2),f1(n1+2),q0,q1,q2,xj
+         integer::j,i
+         ok=.false.;el=(hi-lo)/4
          do j=1,max_steps
-            res=real(complex_time(cmplx(yy,0._dp,dp),.true.),dp)-t
+            call ytime(yy,tt,dtt)
+            res=tt-t
             if(abs(res)<=16*epsilon(t)*t)then
                ok=.true.;return
             endif
@@ -675,14 +600,44 @@ contains
             else
                hi=yy
             endif
-            der=aimag(complex_time(cmplx(yy,1e-24_dp*max(yy,1e-100_dp),dp),.true.))/(1e-24_dp*max(yy,1e-100_dp))
-            trial=yy-res/der
-            rad=min(0.45_dp*(hi-lo),max(2*abs(trial-yy),1e-5_dp*abs(yy)))
-            if(j==1.and.rad>0.and.yy-rad>0.and.yy+rad<sqrt(y0))then
-               old=rectangle(yy,rad,.true.)
-               if(ieee_is_finite(old).and.old>lo.and.old<hi)trial=old
+            if(.not.(hi-lo>8*epsilon(yy)*yy))then
+               ok=abs(res)<=1e-12_dp*t;return
             endif
-            if(.not.ieee_is_finite(trial).or.trial<=lo.or.trial>=hi)trial=(lo+hi)/2
+            el=min(el,hi-lo,.9_dp*yy,.9_dp*(sqrt(y0)-yy))
+            trial=(lo+hi)/2
+            if(el>0)then
+               ! The zero-height rectangle of rect_ratio, in Y.
+               do i=1,n1+2
+                  call ytime(yy+el*u8(i),tt,dtt)
+                  ft(i)=1/(tt-t);f1(i)=-dtt*ft(i)**2
+               enddo
+               q0=0;q1=0;q2=0
+               do i=1,n1
+                  xj=el*u8(i)
+                  q0=q0+w8(i)*f1(i);q1=q1+w8(i)*(xj*f1(i)+ft(i));q2=q2+w8(i)*xj*(xj*f1(i)+2*ft(i))
+               enddo
+               q0=ft(n1+1)-ft(n1+2)-el*q0
+               q1=el*(ft(n1+1)+ft(n1+2))-el*q1
+               q2=el*el*(ft(n1+1)-ft(n1+2))-el*q2
+               dd=q1/q0;de=abs(q2/q0-dd*dd)/el
+               if(ft(n1+1)*ft(n1+2)<0)then
+                  lo=max(lo,yy-el);hi=min(hi,yy+el)
+                  if(de<=4*epsilon(yy)*yy.and.abs(dd)<el)then
+                     yy=yy+dd;ok=yy>0;return
+                  endif
+                  el=max(16*de,1e-7_dp*yy)
+               elseif(.not.(abs(dd)<huge(dd)))then
+                  el=el/2
+               elseif(abs(dd)>=el)then
+                  if(res<0)then
+                     lo=max(lo,yy+el)
+                  else
+                     hi=min(hi,yy-el)
+                  endif
+                  el=2*el
+               endif
+               if(abs(dd)<huge(dd).and.yy+dd>lo.and.yy+dd<hi)trial=yy+dd
+            endif
             if(abs(trial-yy)<=8*epsilon(t)*max(abs(yy),tiny(t)))then
                ok=abs(res)<=1e-12_dp*t;return
             endif
@@ -690,9 +645,29 @@ contains
          enddo
       end function
 
+      ! T(Y) and dT/dY on the short-way hyperbola, with sinh(w/2)=s:
+      ! dw/dY = -2Y/(b*sinh(w)).
+      subroutine ytime(yv,tt,dtt)
+         real(dp),intent(in)::yv
+         real(dp),intent(out)::tt,dtt
+         real(dp)::s,shw,ff(0:3)
+         s=sqrt((y0-yv*yv)/(2*b))
+         shw=2*s*sqrt(1+s*s)
+         call f_derivs(2*asinh(s),-1,0,ff,shw,1+2*s*s)
+         tt=yv*(yv*yv*ff(0)+a)
+         dtt=3*yv*yv*ff(0)+a-2*yv**4*ff(1)/(b*shw)
+      end subroutine
+
+      ! Bracketed contour for rare starter misses: every estimate is a
+      ! zero-height rectangle ratio, with no derivative step. T is monotone
+      ! on the branch, so the sign of T-t at the centre and the rectangle's
+      ! own sign test shrink [lo,hi]; an estimate outside it is replaced by
+      ! the midpoint. A rectangle that leaves the domain (dd not finite)
+      ! carries no sign information and only halves L.
       logical function converge() result(ok)
-         real(dp)::res,trial,rad,old,sgn,left,right
-         integer::j
+         real(dp)::res,trial,sgn,el,dd,de,hs2,hc2,cr,elr,xl,xh,xe,wide
+         integer::j,kr
+         logical::sc,series
          ok=.false.
          ! Monotone direction of the selected branch.
          sgn=1
@@ -707,28 +682,79 @@ contains
                if(hi>300)return
             enddo
          endif
+         trig=.false.;el=(hi-lo)/4
          do j=1,max_steps
             call time_derivs(x,k,m,y0,yend,a,b,d)
             res=d(0)-t
             if(abs(res)<=16*epsilon(t)*t)then
                ok=.true.;return
             endif
-            left=lo;right=hi
+            ! Rectangles stay inside the bracket as it was before this step,
+            ! so they never reach the other branch beyond t_min or a pole.
+            wide=min(x-lo,hi-x)
             if(res*sgn<0)then
                lo=x
             else
                hi=x
             endif
-            trial=x-res/d(1)
-            ! The first finite rectangle encloses the Newton prediction;
-            ! all subsequent corrections remain bracketed on this branch.
-            rad=min(.45_dp*(right-left),max(2*abs(trial-x),1e-5_dp*abs(x)))
-            rad=min(rad,.9_dp*min(x-left,right-x))
-            if(j==1.and.rad>0)then
-               old=rectangle(x,rad,.false.)
-               if(ieee_is_finite(old).and.old>lo.and.old<hi)trial=old
+            if(.not.(hi-lo>8*epsilon(x)*x))then
+               ok=abs(res)<=1e-12_dp*t;return
             endif
-            if(.not.ieee_is_finite(trial).or.trial<=lo.or.trial>=hi)trial=(lo+hi)/2
+            ! Never reach a pole of T (v=pi; also v=0 for m>0) or w<0.
+            el=min(el,1._dp,.9_dp*x,.9_dp*wide)
+            if(k==1.or.(k==2.and.m>0))el=min(el,.9_dp*(pi-x))
+            trial=(lo+hi)/2
+            ! Near the parabola the rectangle works in X=k*x**2, where T is a
+            ! series; in x the closed form cancels (x - sin x cos x ~ x**3).
+            series=m==0.and.k/=2.and.x<.3_dp
+            cr=x;elr=el
+            if(series)then
+               cr=k*x*x;elr=min(2*x*el,.2_dp-abs(cr))
+            endif
+            kr=kexp(elr)
+            if(elr>0.and.kr<=kmax)then
+               if(series)then
+                  call rect_ratio(0,cr,0._dp,1._dp,kr,.true.,y0,yend,a,b,t,m,dd,de,sc)
+               else
+                  if(k>0)then
+                     hs2=sin(x/2);hc2=cos(x/2)
+                  else
+                     call shch(x/2,hs2,hc2)
+                  endif
+                  call rect_ratio(k,x,hs2,hc2,kr,.true.,y0,yend,a,b,t,m,dd,de,sc)
+               endif
+               elr=pow2m(kr)
+               ! The rectangle's ends and its estimate, mapped back to x.
+               xl=xof(cr-elr,series,k);xh=xof(cr+elr,series,k)
+               if(xl>xh)then
+                  xe=xl;xl=xh;xh=xe
+               endif
+               xe=-1
+               if(abs(dd)<huge(dd))xe=xof(cr+dd,series,k)
+               if(sc)then
+                  lo=max(lo,xl);hi=min(hi,xh)
+                  if(de<=4*epsilon(x)*max(abs(cr),merge(1e-2_dp,elr*1e-3_dp,series)).and.abs(dd)<elr.and.xe>0)then
+                     x=xe;ok=.true.;return
+                  endif
+                  el=max(16*de,1e-7_dp*abs(cr))
+                  if(series)el=el/(2*x)
+               elseif(.not.(abs(dd)<huge(dd)))then
+                  el=el/2
+               else
+                  ! No sign change. When the ratio also puts the root outside,
+                  ! the bracket moves past the rectangle; near the root both can
+                  ! be rounding noise, and then neither moves it.
+                  if(abs(dd)>=elr)then
+                     if(res*sgn<0)then
+                        lo=max(lo,xh)
+                     else
+                        hi=min(hi,xl)
+                     endif
+                  endif
+                  el=hi-lo
+               endif
+               if(xe>lo.and.xe<hi)trial=xe
+            endif
             if(abs(trial-x)<=8*epsilon(t)*max(abs(x),1e-100_dp))then
                ok=abs(res)<=1e-12_dp*t;return
             endif
@@ -1076,6 +1102,19 @@ contains
       y=transfer(transfer(x,0_int64)/3+3071306045661749710_int64,y)
       w=1/y;r=(x*w)*(w*w)
       y=y*(1+2*r)/(2+r)
+   end function
+
+   ! x from a rectangle coordinate: X=k*x**2 near the parabola (series), else x
+   ! itself; -1 when X lies on the other side of the parabola.
+   elemental real(dp) function xof(c,series,k) result(x)
+      real(dp),intent(in)::c
+      logical,intent(in)::series
+      integer,intent(in)::k
+      x=c
+      if(series)then
+         x=-1
+         if(k*c>=0)x=sqrt(k*c)
+      endif
    end function
 
    !> Cubic Hermite on [0,1]: values p0,p1 and slopes m0,m1 at 0 and 1.

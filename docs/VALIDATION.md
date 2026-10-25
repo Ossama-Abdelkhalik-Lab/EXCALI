@@ -2,7 +2,7 @@
 
 This file records local evidence from Lamberts-Comparison on macOS with GNU Fortran 16.2 and MATLAB R2026b. It is not a claim of global superiority to ivLam or a reproduction of the supplied five-million-case benchmark.
 
-## Completed checks
+## Completed checks (2026-10-22)
 
 - Full native comparison suite: **24/24 CTests passed**.
 - Independent standalone repository: **3/3 tests passed**, with OpenMP enabled and disabled.
@@ -24,31 +24,11 @@ The comparison gate requires both endpoint velocities within `1e-10 + 1e-10*norm
 
 ## Timing interpretation
 
-The numbers in this section and the next were measured before the zero-height rectangle update (see the end of this file). At that time the extension was slower than ivLam on the local mixed benchmark. Original and extended timings must be reported separately.
-
-Original batched adapters include input validation, rotation into individual local transfer planes and rotation of output velocities back to the input frame. Serial and vector variants retain their supplied kernel-specific compiler flags. The common build uses `-O3 -fno-fast-math`; no `-march=native` speed claim is made. Initialization is outside timed regions. Thread counts are matched, and the parallel build is also checked at one thread.
+Original and extended timings must be reported separately. The original batched adapters include input validation, rotation into individual local transfer planes and rotation of output velocities back to the input frame. Serial and vector variants retain their supplied kernel-specific compiler flags. The common build uses `-O3 -fno-fast-math`; no `-march=native` speed claim is made. Initialization is outside timed regions. Thread counts are matched, and the parallel build is also checked at one thread.
 
 The supplied `original/README.txt` contains historical timing and percentile claims from a different dataset and build. Those claims are retained as provenance, not adopted as results of this validation. No five-million-case corpus was supplied in the imported folder.
 
-## Final native measurements
-
-100,000 independent circular transfers; median of five repetitions; nanoseconds per complete solve. All five entries passed all 100,000 cases in each mode.
-
-| Solver | Scalar, 1 thread | Batch, 1 thread | Batch, 4 threads |
-|---|---:|---:|---:|
-| confluentcontour | 236.3 | 134.4 | 36.6 |
-| ivLam | 236.0 | 228.1 | 71.0 |
-| Original Exact serial | 253.3 | 90.4 | 25.3 |
-| Original Exact vector | 269.7 | 94.7 | 25.1 |
-| Extended eLam | 1005.8 | 995.2 | 289.8 |
-
-Thus the originals were about **2.4–2.5x faster in one-thread batches** and **2.8x faster in four-thread batches** on this circular fixture. Their scalar adapters were slower than ivLam. Maximum absolute velocity errors on this fixture were `2.68e-15` for ivLam, `3.16e-15`/`3.76e-15` for the originals and `4.27e-15` for extended eLam; this does not establish superior original accuracy.
-
-The 22,000-case independent mixed benchmark (2,000 per class) produced zero failures for extended eLam, confluentcontour and ivLam, including 2,000 correctly classified infeasible requests. The originals each failed five high-eccentricity cases, with a worst finite relative endpoint error of **0.4079**. They also rejected unsupported hyperbolic/multi-revolution requests and about half the near-parabolic class. Ordinary short-/long-way elliptic classes passed, but the originals' worst long-way relative error (`1.05e-11`) exceeded ivLam's (`3.44e-13`) on this sample. The statement "more accurate than ivLam" is therefore not supported as a general claim.
-
-Extended eLam took roughly **4.2–6.1x** ivLam's time on the feasible mixed transfer classes, and 7.3x for infeasibility classification. Its finite-rectangle method has broader coverage, but speed optimization remains future work rather than a result claimed here.
-
-Raw results: [one-thread batch](circular_batch_1thread.csv), [four-thread batch](circular_batch_4threads.csv), [one-thread scalar](circular_scalar_1thread.csv), [mixed regimes](extended_mixed.csv). [Metadata](benchmark_metadata.json) records sample sizes, statistics, compiler, solver IDs and the comparison base revision. [Source hashes](validated_sources.json) identify the validated eLam implementation. Mixed timings use the minimum of five repeated block timings; the circular table uses medians. Final native timings were run after the task's builds, propagation checks and MATLAB rendering finished.
+On the 22,000-case mixed benchmark (2,000 per class) the preserved originals each failed five high-eccentricity cases, with a worst finite relative endpoint error of 0.4079, and rejected the unsupported hyperbolic and multi-revolution requests and about half the near-parabolic class. Their worst long-way elliptic error (`1.05e-11`) exceeded ivLam's (`3.44e-13`), so "more accurate than ivLam" is not supported as a general claim. Timings of the first finite-rectangle eLam, before the zero-height update below, are superseded and no longer recorded here.
 
 ## Reproduction
 
@@ -68,7 +48,7 @@ test_elam_comparison;
 test_comparison;
 ```
 
-Native `benchmark_mixed` retains independent quad-precision orbital truth and per-regime failure counts for IDs 0, 1, 6, 7, 8. `benchmark_native_solvers` exercises complete scalar/batch gateway paths on circular truth. Rejected/failed rows do not justify speed claims. See the CSV files accompanying this report for the final local measurements.
+Native `benchmark_mixed` retains independent quad-precision orbital truth and per-regime failure counts for confluentcontour, Russell, both preserved originals and eLam (comparison IDs 0–4 since 2026-10-24). `benchmark_native_solvers` exercises complete scalar/batch gateway paths on circular truth. Rejected/failed rows do not justify speed claims.
 
 ## Zero-height rectangle update — 2026-10-22
 
@@ -193,3 +173,29 @@ A follow-up profile on one x86-64 runner compared the previous and current eLam 
 The baseline x86-64 target used by plain `-O3` has no fused multiply-add, which eLam's polynomial evaluations rely on more than ivLam does.
 
 So eLam's speed relative to ivLam depends on the platform. It is 0.76–1.10× on Apple silicon with macOS's libm, and 1.07–1.40× on this x86-64 runner. Its accuracy advantage holds on both. The same pattern appeared on Linux aarch64 in Docker on the M1: glibc's `sinh`/`cosh`, `cbrt` and `asinh` took about twice Apple's time, and the rectangle kernel ran more slowly. Those Docker timings ran inside a VM, though, so they are only indicative.
+
+## Contour-only safeguards — 2026-10-24
+
+The two derivative-based iterations left in the root solve were replaced with zero-height rectangles:
+
+- **Starter misses** used to fall back to bracketed Newton/bisection, whose first step was a finite complex rectangle. They now continue as a *bracketed contour*. Every estimate is a zero-height rectangle ratio centred on the current point. `T` is monotone on the branch, so two pieces of information shrink the starter's bracket: the sign of `T - t` at the centre, and the rectangle's own sign test (a sign change confines the root to the rectangle; none moves the bracket edge past it). An estimate outside the bracket is replaced by its midpoint. A rectangle that leaves the domain (for example past the hyperbolic branch point) returns a non-finite ratio and only halves `L`.
+- **Very short hyperbolas** (`t < 0.1 t_p`) solved `T(Y) = t` in `Y = sqrt(y)` by Newton with a complex-step derivative. They now use the same bracketed contour in `Y`, with the closed-form `dT/dY = 3Y^2 F + a - 2Y^4 F'(w)/(b sinh w)`. The anomaly coordinate `w` cannot replace `Y` there: in a stress test of 20,000 hyperbolas with `e` from 30 to 10,000, 72% of the cases failed in `w` because the root sits within rounding of the branch point.
+
+The finite complex rectangle and the complex time function are gone. eLam no longer uses complex arithmetic anywhere. The only derivative-based iteration left is the Halley search for the multi-revolution minimum time (one or two steps).
+
+Removing the safeguard altogether is not possible without failures. With it disabled, 0.02–0.77% of each class of `benchmark_mixed` return status `-4` (20,000 cases per class, eight seeds). In most of these the starter is far from the root and the reach-limited interval never contains it (for example a long-way hyperbola whose `T - t` stays near +0.31 across the whole interval), or the root sits beside a pole of `T`.
+
+**Checks:**
+
+- `benchmark_mixed` with 20,000 cases per class under eight seeds (1.76 million solves): zero failures. Each class maximum matches the previous Newton fallback; the rescued cases take 3–6 rectangles each.
+- Short-hyperbola stress set, five seeds of 20,000 (75,000 cases on the `Y` path): zero failures, maxima equal to the Newton version (2.4e-14 to 3.2e-14).
+- The full 1,000,000-case elliptic dataset, case by case against the previous build: 999,930 results are bit-identical, no case differs by more than 4×, there are no failures, and the maxima are unchanged (1.2e-13 for 10°–179°, 3.4e-13 below 10°, 8.8e-11 above 179°).
+- Lamberts-Comparison CTests: 24/24 passed. Standalone repository: 3/3 with OpenMP on and off. MATLAB `run_tests` and `test_elam_comparison`: passed; the hard mixed fixture remains 3,004/3,009.
+- `benchmark_mixed` speed is unchanged within noise (0.87 times ivLam overall on the M1 Pro).
+
+**Rounding sensitivity (found by the Linux x86-64 CI).** Plain `-O3` on x86-64 does not fuse multiply-adds, and a Mac build with `-ffp-contract=off` reproduces its rounding. Under that rounding the first version of the bracketed contour failed 653 near-parabolic and one near-minimum multi-revolution case. Three rules fix it:
+- near the parabola its rectangles use the series coordinate `X = ±x²`, as the main stages do, because the closed form in `x` cancels;
+- a rectangle without a sign change moves the bracket only when its own ratio also puts the root outside, since near the root both signals are rounding noise;
+- rectangles stay inside the bracket as it was before each step, so they never reach the other branch beyond `t_min`.
+
+With these, both roundings match the previous Newton fallback in every `benchmark_mixed` class over eight seeds (same failures and maxima; the one no-FMA `multirev_2_3` case at 1.2e-10 is shared with the old code), and 999,937 of the 1,000,000 dataset results are bit-identical. The same runs show that without FMA the main stages miss far more often: 308–3,472 of 160,000 cases per class instead of 0–1,133. More solves therefore reach the bracketed contour on x86-64, which is a likely contributor to its slower timings.
