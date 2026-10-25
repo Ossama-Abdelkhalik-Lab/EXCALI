@@ -11,7 +11,7 @@ module elam_solver
    use iso_c_binding, only: c_double
    implicit none
    private
-   public :: elam_one, elam_solve, rect_ratio
+   public :: elam_one, elam_solve
    integer,parameter :: dp=real64
    real(dp),parameter :: pi=acos(-1.0_dp),sqrt2=sqrt(2.0_dp),rsqrt2=1/sqrt2
    ! The bit-pattern helpers (pow2m, kexp, rlog, rcbrt) assume IEEE-754
