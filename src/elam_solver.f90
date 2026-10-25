@@ -600,6 +600,9 @@ contains
             else
                hi=yy
             endif
+            if(.not.(hi-lo>8*epsilon(yy)*yy))then
+               ok=abs(res)<=1e-12_dp*t;return
+            endif
             el=min(el,hi-lo,.9_dp*yy,.9_dp*(sqrt(y0)-yy))
             trial=(lo+hi)/2
             if(el>0)then
@@ -625,10 +628,13 @@ contains
                   el=max(16*de,1e-7_dp*yy)
                elseif(.not.(abs(dd)<huge(dd)))then
                   el=el/2
-               elseif(res<0)then
-                  lo=max(lo,yy+el);el=2*el
-               else
-                  hi=min(hi,yy-el);el=2*el
+               elseif(abs(dd)>=el)then
+                  if(res<0)then
+                     lo=max(lo,yy+el)
+                  else
+                     hi=min(hi,yy-el)
+                  endif
+                  el=2*el
                endif
                if(abs(dd)<huge(dd).and.yy+dd>lo.and.yy+dd<hi)trial=yy+dd
             endif
@@ -659,9 +665,9 @@ contains
       ! the midpoint. A rectangle that leaves the domain (dd not finite)
       ! carries no sign information and only halves L.
       logical function converge() result(ok)
-         real(dp)::res,trial,sgn,el,dd,de,hs2,hc2
+         real(dp)::res,trial,sgn,el,dd,de,hs2,hc2,cr,elr,xl,xh,xe,wide
          integer::j,kr
-         logical::sc
+         logical::sc,series
          ok=.false.
          ! Monotone direction of the selected branch.
          sgn=1
@@ -683,38 +689,71 @@ contains
             if(abs(res)<=16*epsilon(t)*t)then
                ok=.true.;return
             endif
+            ! Rectangles stay inside the bracket as it was before this step,
+            ! so they never reach the other branch beyond t_min or a pole.
+            wide=min(x-lo,hi-x)
             if(res*sgn<0)then
                lo=x
             else
                hi=x
             endif
+            if(.not.(hi-lo>8*epsilon(x)*x))then
+               ok=abs(res)<=1e-12_dp*t;return
+            endif
             ! Never reach a pole of T (v=pi; also v=0 for m>0) or w<0.
-            el=min(el,1._dp,.9_dp*x,hi-lo)
+            el=min(el,1._dp,.9_dp*x,.9_dp*wide)
             if(k==1.or.(k==2.and.m>0))el=min(el,.9_dp*(pi-x))
             trial=(lo+hi)/2
-            kr=kexp(el)
-            if(el>0.and.kr<=kmax)then
-               if(k>0)then
-                  hs2=sin(x/2);hc2=cos(x/2)
+            ! Near the parabola the rectangle works in X=k*x**2, where T is a
+            ! series; in x the closed form cancels (x - sin x cos x ~ x**3).
+            series=m==0.and.k/=2.and.x<.3_dp
+            cr=x;elr=el
+            if(series)then
+               cr=k*x*x;elr=min(2*x*el,.2_dp-abs(cr))
+            endif
+            kr=kexp(elr)
+            if(elr>0.and.kr<=kmax)then
+               if(series)then
+                  call rect_ratio(0,cr,0._dp,1._dp,kr,.true.,y0,yend,a,b,t,m,dd,de,sc)
                else
-                  call shch(x/2,hs2,hc2)
-               endif
-               call rect_ratio(k,x,hs2,hc2,kr,.true.,y0,yend,a,b,t,m,dd,de,sc)
-               el=pow2m(kr)
-               if(sc)then
-                  lo=max(lo,x-el);hi=min(hi,x+el)
-                  if(de<=4*epsilon(x)*max(abs(x),el*1e-3_dp).and.abs(dd)<el)then
-                     x=x+dd;ok=x>0;return
+                  if(k>0)then
+                     hs2=sin(x/2);hc2=cos(x/2)
+                  else
+                     call shch(x/2,hs2,hc2)
                   endif
-                  el=max(16*de,1e-7_dp*abs(x))
+                  call rect_ratio(k,x,hs2,hc2,kr,.true.,y0,yend,a,b,t,m,dd,de,sc)
+               endif
+               elr=pow2m(kr)
+               ! The rectangle's ends and its estimate, mapped back to x.
+               xl=xof(cr-elr,series,k);xh=xof(cr+elr,series,k)
+               if(xl>xh)then
+                  xe=xl;xl=xh;xh=xe
+               endif
+               xe=-1
+               if(abs(dd)<huge(dd))xe=xof(cr+dd,series,k)
+               if(sc)then
+                  lo=max(lo,xl);hi=min(hi,xh)
+                  if(de<=4*epsilon(x)*max(abs(cr),merge(1e-2_dp,elr*1e-3_dp,series)).and.abs(dd)<elr.and.xe>0)then
+                     x=xe;ok=.true.;return
+                  endif
+                  el=max(16*de,1e-7_dp*abs(cr))
+                  if(series)el=el/(2*x)
                elseif(.not.(abs(dd)<huge(dd)))then
                   el=el/2
-               elseif(res*sgn<0)then
-                  lo=max(lo,x+el);el=2*el
                else
-                  hi=min(hi,x-el);el=2*el
+                  ! No sign change. When the ratio also puts the root outside,
+                  ! the bracket moves past the rectangle; near the root both can
+                  ! be rounding noise, and then neither moves it.
+                  if(abs(dd)>=elr)then
+                     if(res*sgn<0)then
+                        lo=max(lo,xh)
+                     else
+                        hi=min(hi,xl)
+                     endif
+                  endif
+                  el=hi-lo
                endif
-               if(abs(dd)<huge(dd).and.x+dd>lo.and.x+dd<hi)trial=x+dd
+               if(xe>lo.and.xe<hi)trial=xe
             endif
             if(abs(trial-x)<=8*epsilon(t)*max(abs(x),1e-100_dp))then
                ok=abs(res)<=1e-12_dp*t;return
@@ -1063,6 +1102,19 @@ contains
       y=transfer(transfer(x,0_int64)/3+3071306045661749710_int64,y)
       w=1/y;r=(x*w)*(w*w)
       y=y*(1+2*r)/(2+r)
+   end function
+
+   ! x from a rectangle coordinate: X=k*x**2 near the parabola (series), else x
+   ! itself; -1 when X lies on the other side of the parabola.
+   elemental real(dp) function xof(c,series,k) result(x)
+      real(dp),intent(in)::c
+      logical,intent(in)::series
+      integer,intent(in)::k
+      x=c
+      if(series)then
+         x=-1
+         if(k*c>=0)x=sqrt(k*c)
+      endif
    end function
 
    !> Cubic Hermite on [0,1]: values p0,p1 and slopes m0,m1 at 0 and 1.

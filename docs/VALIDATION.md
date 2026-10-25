@@ -212,3 +212,10 @@ Removing the safeguard altogether is not possible without failures. With it disa
 - The full 1,000,000-case elliptic dataset, case by case against the previous build: 999,930 results are bit-identical, no case differs by more than 4×, there are no failures, and the maxima are unchanged (1.2e-13 for 10°–179°, 3.4e-13 below 10°, 8.8e-11 above 179°).
 - Lamberts-Comparison CTests: 24/24 passed. Standalone repository: 3/3 with OpenMP on and off. MATLAB `run_tests` and `test_elam_comparison`: passed; the hard mixed fixture remains 3,004/3,009.
 - `benchmark_mixed` speed is unchanged within noise (0.87 times ivLam overall on the M1 Pro).
+
+**Rounding sensitivity (found by the Linux x86-64 CI).** Plain `-O3` on x86-64 does not fuse multiply-adds, and a Mac build with `-ffp-contract=off` reproduces its rounding. Under that rounding the first version of the bracketed contour failed 653 near-parabolic and one near-minimum multi-revolution case. Three rules fix it:
+- near the parabola its rectangles use the series coordinate `X = ±x²`, as the main stages do, because the closed form in `x` cancels;
+- a rectangle without a sign change moves the bracket only when its own ratio also puts the root outside, since near the root both signals are rounding noise;
+- rectangles stay inside the bracket as it was before each step, so they never reach the other branch beyond `t_min`.
+
+With these, both roundings match the previous Newton fallback in every `benchmark_mixed` class over eight seeds (same failures and maxima; the one no-FMA `multirev_2_3` case at 1.2e-10 is shared with the old code), and 999,937 of the 1,000,000 dataset results are bit-identical. The same runs show that without FMA the main stages miss far more often: 308–3,472 of 160,000 cases per class instead of 0–1,133. More solves therefore reach the bracketed contour on x86-64, which is a likely contributor to its slower timings.

@@ -131,7 +131,7 @@ is zero for a pure pole and measures the remainder. When $d_e$ is above rounding
 The paper finds both branches at once from four moments on a circle over the whole band. eLam instead decides feasibility first. Every ellipse through both points has $a \ge s/2$, so $t < m\cdot2\pi\,(s/2)^{3/2}$ is rejected before $T$ is evaluated. Otherwise the minimum time comes from one or two Halley steps on $T'(v)=0$. Those steps stop as soon as their error bound decides feasibility, and they also bracket each branch. Each branch then gets its own one-pole interval and the same quadrature as zero revolutions.
 
 \subsection*{Step 9: a contour-only safeguard}
-Every accepted interval must show a sign change of $T-t$ and contain no pole of $T$. When a starter misses, the estimate re-centres the interval or the interval widens, for up to five passes. If that still fails (0 to 0.8\% of solves), the solve continues as a bracketed contour. Each step is again a zero-height rectangle centred on the current point. $T$ is monotone on the branch, so the sign of $T-t$ at the centre and the rectangle's own sign test shrink the bracket $[\text{lo},\text{hi}]$; an estimate outside the bracket is replaced by its midpoint. A rescued case takes 3 to 6 rectangles. Very short hyperbolas ($t<0.1\,t_p$) use the same bracketed contour in $Y=\sqrt{y}$, because in $w$ the root sits within rounding of the branch point.
+Every accepted interval must show a sign change of $T-t$ and contain no pole of $T$. When a starter misses, the estimate re-centres the interval or the interval widens, for up to five passes. If that still fails (0 to 0.8\% of solves), the solve continues as a bracketed contour. Each step is again a zero-height rectangle centred on the current point. $T$ is monotone on the branch, so the sign of $T-t$ at the centre and the rectangle's own sign test shrink the bracket $[\text{lo},\text{hi}]$; an estimate outside the bracket is replaced by its midpoint. Near the parabola its rectangles use the series coordinate $X$, as the main stages do. A rectangle without a sign change moves the bracket only when its own ratio agrees that the root is outside, because next to the root both signals are rounding noise. Each rectangle also stays inside the bracket as it was before the step, so it never reaches the other branch beyond $t_\text{min}$. A rescued case takes 3 to 6 rectangles. Very short hyperbolas ($t<0.1\,t_p$) use the same bracketed contour in $Y=\sqrt{y}$, because in $w$ the root sits within rounding of the branch point.
 
 The safeguard cannot simply be deleted: with it disabled, 0.02 to 0.77\% of each benchmark class fails. Until 2026-10-24 it was a Newton/bisection iteration whose first step was a finite complex rectangle. The contour version has the same maximum error in every class, and 999,930 of the 1,000,000 dataset results are bit-identical to the Newton version.
 
@@ -260,7 +260,7 @@ The multi-revolution starter's minimum-time search is the largest single cost, a
 
 \section{Code breakdown}
 
-\code{src/elam\_solver.f90} is 1,080 lines, 874 of them code. The quadrature kernel and its stage control take about 210 code lines; starters and multi-revolution handling take about 110. Lamberts-Comparison checks this repository out as \code{solvers/elam}, where eLam is solver ID 1 and the two Exact v2.2 originals are IDs 2 and 3.
+\code{src/elam\_solver.f90} is 1,132 lines, 915 of them code. The quadrature kernel and its stage control take about 210 code lines; starters and multi-revolution handling take about 110. Lamberts-Comparison checks this repository out as \code{solvers/elam}, where eLam is solver ID 1 and the two Exact v2.2 originals are IDs 2 and 3.
 
 {\small
 \begin{tabularx}{\linewidth}{r r >{\raggedright\arraybackslash}p{3.7cm} >{\raggedright\arraybackslash}X}
@@ -276,12 +276,12 @@ Lines & Code & Part & What it does \\
 324--371 & 42 & Velocities & Radial and transverse components \\
 372--505 & 101 & \code{contour\_root}, \code{rect\_root} & Stage 1 and stage 2 control: re-centre, widen, accept \\
 506--580 & 62 & \code{canonical}, \code{reach} & Coordinate choice and the analytic singularity distance $R$ \\
-581--653 & 62 & \code{converge\_y}, \code{ytime} & Bracketed contour in $\sqrt{y}$ for very short hyperbolas \\
-654--726 & 63 & \code{converge} & Bracketed contour for starter misses \\
-727--850 & 112 & \code{rect\_ratio} & The zero-height rectangle: fused node loop, $\Q_0$, $\Q_1$, $\Q_2$, $d_d$, $d_e$, sign test \\
-851--887 & 30 & \code{rotate} & Half-angle functions carried by angle addition \\
-888--980 & 86 & \code{f\_derivs}, \code{time\_derivs} & $T$ and its derivatives in each coordinate \\
-981--1080 & 79 & Helpers & \code{shch}, \code{pow2m}, \code{kexp}, \code{rasinh}, \code{rlog}, \code{rcbrt}, \code{hermite}, \code{cross} \\
+581--659 & 68 & \code{converge\_y}, \code{ytime} & Bracketed contour in $\sqrt{y}$ for very short hyperbolas \\
+660--765 & 88 & \code{converge} & Bracketed contour for starter misses \\
+766--889 & 112 & \code{rect\_ratio} & The zero-height rectangle: fused node loop, $\Q_0$, $\Q_1$, $\Q_2$, $d_d$, $d_e$, sign test \\
+890--926 & 30 & \code{rotate} & Half-angle functions carried by angle addition \\
+927--1019 & 86 & \code{f\_derivs}, \code{time\_derivs} & $T$ and its derivatives in each coordinate \\
+1020--1132 & 89 & Helpers & \code{shch}, \code{pow2m}, \code{kexp}, \code{rasinh}, \code{rlog}, \code{rcbrt}, \code{xof}, \code{hermite}, \code{cross} \\
 \bottomrule
 \end{tabularx}
 }
