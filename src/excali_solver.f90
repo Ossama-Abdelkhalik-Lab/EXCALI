@@ -11,7 +11,7 @@ module excali_solver
    use iso_c_binding, only: c_double
    implicit none
    private
-   public :: excali_one, excali_solve
+   public :: excali_one, excali_solve, excali_batch
    integer,parameter :: dp=real64
    real(dp),parameter :: pi=acos(-1.0_dp),sqrt2=sqrt(2.0_dp),rsqrt2=1/sqrt2
    ! The bit-pattern helpers (pow2m, kexp, rlog, rcbrt) assume IEEE-754
@@ -19,6 +19,7 @@ module excali_solver
    logical,parameter  :: ieee64=radix(1._dp)==2.and.digits(1._dp)==53.and. &
       maxexponent(1._dp)==1024.and.minexponent(1._dp)==-1021.and.bit_size(0_int64)==64
    integer,parameter  :: max_steps=120
+   integer,parameter  :: nb=32          ! excali_batch chunk size
    ! Thin-rectangle quadrature in its zero-height limit. On [c-L,c+L],
    ! L=2**(-kr), with f=1/(T-t) real, Gauss-Legendre nodes x and weights w:
    !   root = c + Q[((x-c)f)'] / Q[f'],   Q[g'] = g(c+L)-g(c-L) - L*sum w g'(x),
@@ -49,7 +50,7 @@ module excali_solver
    real(dp),protected :: ch3f(5,0:kmax)=reshape([((cosh(.5_dp**(k_+1)*u3(j_)),j_=1,5),k_=0,kmax)],[5,kmax+1])
    real(dp),protected :: sh3f(5,0:kmax)=reshape([((sinh(.5_dp**(k_+1)*u3(j_)),j_=1,5),k_=0,kmax)],[5,kmax+1])
    ! Reciprocal factorials 1/j! (constant multiplies, not divisions).
-   real(dp),parameter :: rf(14)=[(1/gamma(j_+1._dp),j_=1,14)]
+   real(dp),parameter :: rf(16)=[(1/gamma(j_+1._dp),j_=1,16)]
    ! (1-cos(v))/X in X=v**2 (highest first), for the near-parabolic coordinate.
    real(dp),parameter :: cser(9)=[1._dp/6402373705728000._dp,-1._dp/20922789888000._dp,1._dp/87178291200._dp, &
       -1._dp/479001600._dp,1._dp/3628800._dp,-1._dp/40320._dp,1._dp/720._dp,-1._dp/24._dp,.5_dp]
@@ -59,6 +60,8 @@ module excali_solver
       3821869001._dp/10751460894720000._dp,133541._dp/48117888000._dp,763967._dp/36324288000._dp, &
       1393481._dp/9081072000._dp,1181._dp/1108800,29._dp/4200,17._dp/420,1._dp/5,2._dp/3]
    real(dp),parameter :: pser2(10)=pser/sqrt(2._dp)
+   ! Zero-revolution starter tables (tools/gen_tables.py).
+   include 'excali_tables.inc'
 
    interface
       pure real(c_double) function cbrt_c(x) bind(c,name='cbrt')
@@ -109,10 +112,10 @@ contains
                t,tp,tv2,x,lo,hi,phi,sig,tmin,d(0:3),f(0:3),k0,kpi,c,s,y,dc,ratio, &
                vr1,vr2,vt1,vt2,wb,psi,yy,sw,dt,hs,hc,s1,s2
    integer  :: m,br,k,it
-   logical :: merged,trig
+   logical :: merged,trig,tabbed
 
    v1=ieee_value(0.0_dp,ieee_quiet_nan);v2=v1;half=0;status=-1
-   merged=.false.;trig=.false.
+   merged=.false.;trig=.false.;tabbed=.false.
    m=0;br=-1
    if(present(nrev))m=nrev
    if(present(branch))br=branch
@@ -163,13 +166,42 @@ contains
    if(m==0)then
       tp=sqrt(y0)*(y0*sqrt2/3+a)                                 ! parabolic time
       tv2=y0*sqrt(y0)*(rsqrt2/5)+b*(sqrt(y0)*rsqrt2+a/(2*sqrt(y0)))/2 ! dT/d(v**2) at 0
+      if(t>tp.and.abs(t-tp)>4*epsilon(t)*tp)then
+         phi=rcbrt(tp/t)
+         ! Ellipse: the root depends only on the Lancaster-Blanchard parameter
+         ! lam=a/(sqrt2*s_L) and phi; the compiled-in tables cover the interior.
+         if(phi<=.99_dp)then
+            dc=sqrt(q*q*(s1+s2)**2+4*p*p*ss*ss);c=(rn1+rn2+dc)/2   ! chord, semiperimeter
+            x=table_v(a/(sqrt2*c)/(1+sqrt(dc/c)),phi)
+            tabbed=x>0
+         endif
+      endif
       if(abs(t-tp)<=4*epsilon(t)*tp)then
-         x=0                                                     ! parabola
+         x=0;tabbed=.false.                                      ! parabola
+      elseif(tabbed)then
+         continue
+      elseif(abs(t-tp)<=.03_dp*tp)then
+         ! Outside the tables near the parabola: second-order series
+         ! reversion in X = +-x**2 (accurate to ~X**2 relative).
+         c=near_parabola_x(y0,a,b,t,tp)
+         if(c*(t-tp)>0)then
+            k=1;if(c<0)k=-1
+            x=sqrt(abs(c));tabbed=.true.
+            if(k<0)then
+               hi=huge(hi);wb=0
+               if(b>0)then
+                  sw=sqrt(y0/(2*b));dt=sqrt(1+sw*sw)
+                  wb=2*log1p_c(sw+sw*sw/(1+dt));hi=wb
+               endif
+            endif
+         endif
+      endif
+      if(tabbed.or.abs(t-tp)<=4*epsilon(t)*tp)then
+         continue
       elseif(t>tp)then
          ! Ellipse: cubic Hermite for v**2 in phi=(tp/t)**(1/3), between
          ! v**2=(t-tp)/tv2 at phi=1 and pi-v=phi*(K/tp)**(1/3) at phi=0,
          ! with the exact upper pole T ~ pi*y(pi)**1.5/(sqrt2*(pi-v)**3).
-         phi=rcbrt(tp/t)
          x=hermite(phi,pi*pi,-2*pi*sqrt(ypi)*rcbrt((pi*rsqrt2)/tp),0._dp,-3*tp/tv2)
          if(.not.(x>0))x=(t-tp)/tv2         ! model undershoot: parabolic limit
          x=min(sqrt(x),pi*(1-1e-3_dp))
@@ -211,17 +243,24 @@ contains
                if(.not.converge_y())return
                sw=(y0-yy*yy)/(2*b);x=2*asinh(sqrt(sw))
             else
-               ! Cubic Hermite for w**2 in (t/tp)**2 between the parabola and
-               ! wb, where T**2 ~ a**2*y has slope -a**2*b*sinh(wb).
-               x=hermite((t/tp)**2,wb*wb,-wb*tp*tp/(a*a*b*sw*dt),0._dp,-tp/(2*tv2))
-               if(.not.(x>0))x=(tp-t)/tv2
-               x=min(sqrt(x),wb*(1-1e-6_dp))
+               x=hyper_table()
+               if(.not.tabbed)then
+                  ! Cubic Hermite for w**2 in (t/tp)**2 between the parabola and
+                  ! wb, where T**2 ~ a**2*y has slope -a**2*b*sinh(wb).
+                  x=hermite((t/tp)**2,wb*wb,-wb*tp*tp/(a*a*b*sw*dt),0._dp,-tp/(2*tv2))
+                  if(.not.(x>0))x=(tp-t)/tv2
+                  x=min(sqrt(x),wb*(1-1e-6_dp))
+               endif
             endif
          else
-            ! Long way: T ~ sqrt(-b)*(y0+b)*exp(-w/2) as w -> infinity.
-            psi=rlog(tp/t)
-            x=sqrt(tp*psi/tv2)
-            if(psi>1)x=max(x,2*rlog(sqrt(-b)*(y0+b)/t))
+            wb=0
+            x=hyper_table()
+            if(.not.tabbed)then
+               ! Long way: T ~ sqrt(-b)*(y0+b)*exp(-w/2) as w -> infinity.
+               psi=rlog(tp/t)
+               x=sqrt(tp*psi/tv2)
+               if(psi>1)x=max(x,2*rlog(sqrt(-b)*(y0+b)/t))
+            endif
          endif
       endif
    else
@@ -229,91 +268,43 @@ contains
       ! so T > m*2*pi*(s/2)**1.5 (within 31% of the minimum time) rejects
       ! most infeasible times without evaluating T.
       status=5
-      c=(rn1+rn2+sqrt((rn1-rn2)**2+4*rn1*rn2*ss*ss))/2
+      dc=sqrt((rn1-rn2)**2+4*rn1*rn2*ss*ss);c=(rn1+rn2+dc)/2     ! chord, semiperimeter
       if(t<m*pi*c*sqrt(c)/sqrt2*(1-1e-12_dp))return
-      ! Minimum time by Halley on T'(v) = 0, started at the large-m minimum
-      ! of y**1.5/sin(v)**3, cos v = b/(y(0)+b+sqrt(y(0)*y(pi))), which is
-      ! off by ~0.15/m. Halley leaves at most ~12*step**3 in v and ~150*
-      ! step**4 relative in tmin, so it stops once tmin decides feasibility
-      ! and locates the minimum well inside the distance to the root.
-      ! Half-angle functions follow from cos v, then by angle addition.
-      c=b/(y0+b+sqrt(y0*ypi))
-      x=acos(c);hs=sqrt((1-c)/2);hc=sqrt((1+c)/2)
-      do it=1,20
-         call time_derivs(x,1,m,y0,yend,a,b,d,hs,hc)
-         p=-2*d(1)*d(2)/(2*d(2)**2-d(1)*d(3))
-         dt=min(max(x+p,x/2),(x+pi)/2)-x
-         ! T and T'' at the step from the Taylor data (error O(step**4)).
-         tmin=d(0)+dt*(d(1)+dt*(d(2)/2+dt*d(3)/6))
-         x=x+dt;call rotate(1,x,dt/2,hs,hc)
-         ! A step below 1e-3 leaves ~1e-8 in v, and tmin is quadratic in it.
-         if(abs(dt)<=1e-3_dp)exit
-         if(abs(dt)<.3_dp.and.tmin>0)then
-            p=t-tmin;s=300*tmin*dt**4
-            if(p<-s)exit
-            if(p>s.and.12*abs(dt)**3<sqrt(2*p/max(d(2),tiny(p)))/8)exit
+      ! Tables: feasibility, the minimum-time location (the branch bracket)
+      ! and the branch root, unless t is within the table error of t_min.
+      call mrev_table(a/(sqrt2*c)/(1+sqrt(dc/c)),c,t,m,br,x,tmin,it)
+      if(it==5)return
+      if(it==1)then
+         status=-4;tabbed=.true.
+         if(br<0)then
+            hi=tmin
+         else
+            lo=tmin
          endif
-      enddo
-      ! T'' at the minimum; after a larger early-exit step near the pole the
-      ! linear update is unreliable and the starter needs only its scale.
-      p=d(2)+dt*d(3)
-      if(p>d(2)/2.or.abs(dt)<=1e-3_dp)d(2)=p
-      if(t<tmin*(1-16*epsilon(t)).or..not.(d(2)>0))return
-      merged=abs(t-tmin)<=16*epsilon(t)*tmin
-      if(merged)then
-         status=1
-         lo=x;hi=x
-      endif
-      status=-4
-      ! Each branch: cubic Hermite in sig=sqrt(1-(tmin/t)**(1/3)) between the
-      ! minimum (v*-v ~ sqrt(6*tmin/T'')*sig) and the pole T ~ K/v**3 at sig=1.
-      p=tmin/t;sig=rcbrt(p)
-      sig=sqrt(max((1-p)/(1+sig+sig*sig),0._dp))   ! 1-p**(1/3) without cancellation
-      k0=y0*sqrt(y0)*m*pi/sqrt2;kpi=ypi*sqrt(ypi)*(m+1)*pi/sqrt2
-      ! Near a pole the asymptote with y quadratic in the pole distance d,
-      ! T ~ n*pi*y**1.5/(sqrt2*d**3)+a*sqrt(y), y ~ y_p+b*d**2/2 (v=0) or
-      ! y_p-b*d**2/2 (v=pi), gives y/d**2 = Q in closed form; it also covers
-      ! y_p<<|b|, where T plateaus before the pole; used when the Hermite
-      ! starter collapses onto the pole and the model root is well inside.
-      if(br<0)then
-         hi=x
-         x=hermite(sig,x,-sqrt(6*tmin/d(2)),0._dp,-2*rcbrt(k0/tmin))
-         p=t-a*sqrt(y0)
-         if(p>0.and.x<.02_dp*hi)then
-            p=rcbrt(sqrt2*p/(m*pi))**2-b/2
-            if(p>0)then
-               if(sqrt(y0/p)<hi/2)x=sqrt(y0/p)
-            endif
-         endif
-      else
-         lo=x
-         x=pi-hermite(sig,pi-x,-sqrt(6*tmin/d(2)),0._dp,-2*rcbrt(kpi/tmin))
-         p=t-a*sqrt(ypi)
-         if(p>0.and.pi-x<.02_dp*(pi-lo))then
-            p=rcbrt(sqrt2*p/((m+1)*pi))**2+b/2
-            if(p>0)then
-               if(sqrt(ypi/p)<(pi-lo)/2)x=pi-sqrt(ypi/p)
-            endif
-         endif
-      endif
-      if(t-tmin<1e-2_dp*tmin)then
-         ! Close to the minimum, invert t-tmin = T''/2*e**2 + T'''/6*e**3 by
-         ! series reversion; the root may lie far inside the bracket margin.
-         p=sqrt(2*(t-tmin)/d(2))
-         x=merge(hi,lo,br<0)+merge(-p,p,br<0)-d(3)/(6*d(2))*p*p
-         x=min(max(x,lo+p/2),hi-p/2)
-      else
-         x=min(max(x,lo+(hi-lo)*1e-3_dp),hi-(hi-lo)*1e-3_dp)
+      elseif(.not.mrev_start())then
+         return
       endif
    endif
 
    ! Store distance from the upper pole directly on near-full-period arcs.
    ! Subtracting a converged v from pi loses the small arc information.
-   if(k==1.and.x>0.75_dp*pi.and..not.merged)then
-      p=lo;lo=pi-hi;hi=pi-p;x=pi-x;k=2
-   endif
+   call pole_coordinate()
 
    !======= Root: zero-height thin rectangles =======
+   ! Table starters are within 0.0064*min(v,pi-v) of the root, and every
+   ! singularity of 1/(T-t) lies at least that far (in v, or in pi-v near the
+   ! pole), so one 8-node rectangle of half-width min(v,pi-v)/16 is final
+   ! (error ~(1/32)**16). The general path below takes any case it rejects.
+   if(tabbed)then
+      if(fast_root())goto 100
+      if(m>0)then
+         ! The table bracket ends at an estimated minimum-time location;
+         ! locate the minimum instead.
+         k=1;lo=0;hi=pi;status=5
+         if(.not.mrev_start())return
+         call pole_coordinate()
+      endif
+   endif
    if(x>0.and.yy<0.and..not.merged)then
       ! Rare starter misses continue as a bracketed contour.
       if(.not.contour_root())then
@@ -322,6 +313,7 @@ contains
    endif
 
    !======= Velocities (radial/transverse, cancellation-free) =======
+100 continue
    p=sign(1.0_dp,a)
    if(yy>=0)then
       y=yy*yy;dc=-2*sw-ss*ss/(1+cs)             ! cs-cosh(w), from y
@@ -331,7 +323,7 @@ contains
       if(trig)then
          sw=hs;dt=hc
       elseif(k>0)then
-         sw=sin(x/2);dt=cos(x/2)
+         call sincos_half(x,sw,dt)
       else
          call shch(x/2,sw,dt)
       endif
@@ -384,6 +376,151 @@ contains
       ! and the complex roots of T=t near a pole of T. Near the parabola the
       ! coordinate is X=k*x**2, where T is a series in X. On failure the
       ! state is restored for the safeguarded fallback.
+      ! Multi-revolution starter without the tables: minimum time by Halley,
+      ! then the branch starter. False (status 5) when t is below t_min.
+      logical function mrev_start() result(ok)
+         integer::it
+         real(dp)::p,dt,s
+         ok=.false.
+         ! Minimum time by Halley on T'(v) = 0, started at the large-m minimum
+         ! of y**1.5/sin(v)**3, cos v = b/(y(0)+b+sqrt(y(0)*y(pi))), which is
+         ! off by ~0.15/m. Halley leaves at most ~12*step**3 in v and ~150*
+         ! step**4 relative in tmin, so it stops once tmin decides feasibility
+         ! and locates the minimum well inside the distance to the root.
+         ! Half-angle functions follow from cos v, then by angle addition.
+         c=b/(y0+b+sqrt(y0*ypi))
+         x=acos(c);hs=sqrt((1-c)/2);hc=sqrt((1+c)/2)
+         do it=1,20
+            call time_derivs(x,1,m,y0,yend,a,b,d,hs,hc)
+            p=-2*d(1)*d(2)/(2*d(2)**2-d(1)*d(3))
+            dt=min(max(x+p,x/2),(x+pi)/2)-x
+            ! T and T'' at the step from the Taylor data (error O(step**4)).
+            tmin=d(0)+dt*(d(1)+dt*(d(2)/2+dt*d(3)/6))
+            x=x+dt;call rotate(1,x,dt/2,hs,hc)
+            ! A step below 1e-3 leaves ~1e-8 in v, and tmin is quadratic in it.
+            if(abs(dt)<=1e-3_dp)exit
+            if(abs(dt)<.3_dp.and.tmin>0)then
+               p=t-tmin;s=300*tmin*dt**4
+               if(p<-s)exit
+               if(p>s.and.12*abs(dt)**3<sqrt(2*p/max(d(2),tiny(p)))/8)exit
+            endif
+         enddo
+         ! T'' at the minimum; after a larger early-exit step near the pole the
+         ! linear update is unreliable and the starter needs only its scale.
+         p=d(2)+dt*d(3)
+         if(p>d(2)/2.or.abs(dt)<=1e-3_dp)d(2)=p
+         if(t<tmin*(1-16*epsilon(t)).or..not.(d(2)>0))return
+         merged=abs(t-tmin)<=16*epsilon(t)*tmin
+         if(merged)then
+            status=1
+            lo=x;hi=x
+         endif
+         status=-4
+         ! Each branch: cubic Hermite in sig=sqrt(1-(tmin/t)**(1/3)) between the
+         ! minimum (v*-v ~ sqrt(6*tmin/T'')*sig) and the pole T ~ K/v**3 at sig=1.
+         p=tmin/t;sig=rcbrt(p)
+         sig=sqrt(max((1-p)/(1+sig+sig*sig),0._dp))   ! 1-p**(1/3) without cancellation
+         k0=y0*sqrt(y0)*m*pi/sqrt2;kpi=ypi*sqrt(ypi)*(m+1)*pi/sqrt2
+         ! Near a pole the asymptote with y quadratic in the pole distance d,
+         ! T ~ n*pi*y**1.5/(sqrt2*d**3)+a*sqrt(y), y ~ y_p+b*d**2/2 (v=0) or
+         ! y_p-b*d**2/2 (v=pi), gives y/d**2 = Q in closed form; it also covers
+         ! y_p<<|b|, where T plateaus before the pole; used when the Hermite
+         ! starter collapses onto the pole and the model root is well inside.
+         if(br<0)then
+            hi=x
+            x=hermite(sig,x,-sqrt(6*tmin/d(2)),0._dp,-2*rcbrt(k0/tmin))
+            p=t-a*sqrt(y0)
+            if(p>0.and.x<.02_dp*hi)then
+               p=rcbrt(sqrt2*p/(m*pi))**2-b/2
+               if(p>0)then
+                  if(sqrt(y0/p)<hi/2)x=sqrt(y0/p)
+               endif
+            endif
+         else
+            lo=x
+            x=pi-hermite(sig,pi-x,-sqrt(6*tmin/d(2)),0._dp,-2*rcbrt(kpi/tmin))
+            p=t-a*sqrt(ypi)
+            if(p>0.and.pi-x<.02_dp*(pi-lo))then
+               p=rcbrt(sqrt2*p/((m+1)*pi))**2+b/2
+               if(p>0)then
+                  if(sqrt(ypi/p)<(pi-lo)/2)x=pi-sqrt(ypi/p)
+               endif
+            endif
+         endif
+         if(t-tmin<1e-2_dp*tmin)then
+            ! Close to the minimum, invert t-tmin = T''/2*e**2 + T'''/6*e**3 by
+            ! series reversion; the root may lie far inside the bracket margin.
+            p=sqrt(2*(t-tmin)/d(2))
+            x=merge(hi,lo,br<0)+merge(-p,p,br<0)-d(3)/(6*d(2))*p*p
+            x=min(max(x,lo+p/2),hi-p/2)
+         else
+            x=min(max(x,lo+(hi-lo)*1e-3_dp),hi-(hi-lo)*1e-3_dp)
+         endif
+         ok=.true.
+      end function
+
+      subroutine pole_coordinate()
+         real(dp)::p
+         if(k==1.and.x>0.75_dp*pi.and..not.merged)then
+            p=lo;lo=pi-hi;hi=pi-p;x=pi-x;k=2
+         endif
+      end subroutine
+
+      ! Hyperbolic table starter (sets tabbed); wb is the short-way branch point.
+      real(dp) function hyper_table() result(w)
+         real(dp)::dc,sl
+         dc=sqrt(q*q*(s1+s2)**2+4*p*p*ss*ss);sl=(rn1+rn2+dc)/2   ! chord, semiperimeter
+         w=table_w(a/(sqrt2*sl)/(1+sqrt(dc/sl)),t/tp,wb)
+         tabbed=w>0
+      end function
+
+      ! One 8-node rectangle from a table starter. The starter is within a
+      ! small fraction of the half-width L of the root, and L is at most
+      ! 1/16 of a lower bound on the distance to every singularity of
+      ! 1/(T-t) in the coordinate used (v, pi-v, w, or X=+-x**2 near the
+      ! parabola, where T is a series for |X|<=0.2), so the rectangle is
+      ! final (error ~(1/32)**16). The general path takes any case it rejects.
+      logical function fast_root() result(ok)
+         real(dp)::c,el,dd,de,hs1,hc1
+         integer::kind1,kr
+         logical::sc
+         ok=.false.
+         hs1=0;hc1=1
+         if(m>0)then
+            ! Bracket [lo,hi] ends at the poles or at the minimum-time location.
+            kind1=k;c=x
+            el=min(c-lo,hi-c)
+            call sincos_half(c,hs1,hc1)
+         elseif(abs(k)==1.and.x<.3_dp)then
+            kind1=0;c=k*x*x
+            el=min(abs(c),.2_dp-abs(c))
+            if(k<0.and.b>0)el=min(el,wb*wb-abs(c))
+         elseif(k>0)then
+            kind1=k;c=x                    ! k=2: x is already pi-v
+            el=min(c,pi-c)
+            call sincos_half(c,hs1,hc1)
+         else
+            kind1=-1;c=x
+            el=min(c,pi)
+            if(b>0)el=min(2*c,wb-c)
+            call shch(c/2,hs1,hc1)
+         endif
+         if(.not.(el>0))return
+         kr=kexp(el/16)
+         call rect_ratio(kind1,c,hs1,hc1,kr,.true.,y0,yend,a,b,t,m,dd,de,sc)
+         el=pow2m(kr)
+         if(.not.(sc.and.abs(dd)<.8_dp*el.and.de<=4*epsilon(c)*max(abs(c),merge(1e-2_dp,0._dp,kind1==0))))return
+         c=c+dd
+         if(kind1==0)then
+            k=1;if(c<0)k=-1
+            x=sqrt(abs(c));trig=.false.
+         else
+            call rotate(kind1,c,dd/2,hs1,hc1)
+            k=kind1;x=c;hs=hs1;hc=hc1;trig=.true.
+         endif
+         ok=x>0
+      end function
+
       logical function contour_root() result(ok)
          integer::k0
          real(dp)::lo0,hi0
@@ -414,7 +551,7 @@ contains
             if(y0+2*b>=0)then
                eta=2*rasinh(sqrt((y0+2*b)/(-2*b)))
             else
-               bim=2*asin(sqrt(y0/(-2*b)))
+               bim=2*rasin(sqrt(y0/(-2*b)))
             endif
          endif
          c=x;kind1=k;nox=.false.;de=0
@@ -422,11 +559,12 @@ contains
          ! level. A self-consistent estimate outside the interval re-centres
          ! (going straight to stage 2 if already precise enough); an
          ! inconsistent one (root far away) doubles L, up to ~R.
-         grow=4;outside=.false.
+         grow=4;if(tabbed)grow=16
+         outside=.false.
          do pass=1,5
             call canonical(kind1,c,de,nox)
             if(.not.trig.and.kind1>0)then
-               hs=sin(c/2);hc=cos(c/2);trig=.true.
+               call sincos_half(c,hs,hc);trig=.true.
             elseif(.not.trig.and.kind1<0)then
                call shch(c/2,hs,hc);trig=.true.
             endif
@@ -485,7 +623,7 @@ contains
             if(kr>kmax)return
             ! 3 nodes suffice far inside R; otherwise use the 8-node rule.
             if(.not.trig.and.kind1>0)then
-               hs=sin(c/2);hc=cos(c/2);trig=.true.
+               call sincos_half(c,hs,hc);trig=.true.
             elseif(.not.trig.and.kind1<0)then
                call shch(c/2,hs,hc);trig=.true.
             endif
@@ -764,6 +902,229 @@ contains
 
    end subroutine excali_one
 
+   ! Batch of normalized solves, same arguments per case as excali_one. The
+   ! common case (a starter from the tables or the near-parabolic series, or
+   ! a parabola, with the transfer angle not within 1e-4 of 0 or pi) runs in stages over
+   ! blocks of cases, so independent cases overlap: geometry and table
+   ! starter, one 8-node rectangle, velocities. Results are those of
+   ! excali_one, which solves every other case and any rectangle a stage does
+   ! not accept.
+   subroutine excali_batch(n,r1,r2,tof,direction,v1,v2,status,half,nrev,branch)
+   integer,intent(in)   :: n
+   real(dp),intent(in)  :: r1(3,n),r2(3,n),tof(n)
+   integer,intent(in)   :: direction(n),nrev(n),branch(n)
+   real(dp),intent(out) :: v1(3,n),v2(3,n)
+   integer,intent(out)  :: status(n),half(n)
+   integer :: i0,nc
+   ! Chunks are independent; under OpenMP they run in parallel (dynamic
+   ! schedule), and small batches stay serial.
+   !$omp parallel do schedule(dynamic) private(nc) if(n>8*nb)
+   do i0=1,n,nb
+      nc=min(nb,n-i0+1)
+      call batch_chunk(nc,r1(:,i0:i0+nc-1),r2(:,i0:i0+nc-1),tof(i0:i0+nc-1),direction(i0:i0+nc-1), &
+         v1(:,i0:i0+nc-1),v2(:,i0:i0+nc-1),status(i0:i0+nc-1),half(i0:i0+nc-1),nrev(i0:i0+nc-1),branch(i0:i0+nc-1))
+   enddo
+   !$omp end parallel do
+   end subroutine excali_batch
+
+   ! One chunk (nc <= nb cases) of excali_batch, stage by stage.
+   subroutine batch_chunk(nc,r1,r2,tof,direction,v1,v2,status,half,nrev,branch)
+   integer,intent(in)   :: nc
+   real(dp),intent(in)  :: r1(3,nc),r2(3,nc),tof(nc)
+   integer,intent(in)   :: direction(nc),nrev(nc),branch(nc)
+   real(dp),intent(out) :: v1(3,nc),v2(3,nc)
+   integer,intent(out)  :: status(nc),half(nc)
+   real(dp) :: e1(3,nb),e2(3,nb),t1v(3,nb),t2v(3,nb),scl(nb),s1(nb),s2(nb),q(nb),cs(nb),ss(nb), &
+               a(nb),b(nb),y0(nb),yend(nb),t(nb),x(nb),hs(nb),hc(nb),tau(nb),ddv(nb),dev(nb),wb(nb),tq(nb)
+   real(dp) :: rn1,rn2,h(3),hn,p,tp,c,dd,el,sw,dt,s,y,dc,ratio,vr1,vr2,vt1,vt2
+   integer :: k(nb),kd(nb),kw(nb),j
+   logical :: fast(nb),scv(nb),solve(nb),near(nb),infeas(nb)
+   ! Stage 1: geometry (as in excali_one) and the table coordinates; k is
+   ! 1 for an ellipse, -1 for a hyperbola, 0 for a parabola.
+   do j=1,nc
+      fast(j)=.false.;infeas(j)=.false.
+      if(abs(direction(j))/=1.or.nrev(j)<0.or.abs(branch(j))/=1.or..not.(tof(j)>0) &
+         .or..not.ieee_is_finite(tof(j)))cycle
+      rn1=sqrt(dot_product(r1(:,j),r1(:,j)));rn2=sqrt(dot_product(r2(:,j),r2(:,j)))
+      if(.not.(rn1>0.and.rn2>0).or..not.ieee_is_finite(rn1+rn2))cycle
+      e1(:,j)=r1(:,j)/rn1;e2(:,j)=r2(:,j)/rn2
+      if(rn1>=rn2)then
+         scl(j)=rn1;rn2=rn2/rn1;rn1=1
+      else
+         scl(j)=rn2;rn1=rn1/rn2;rn2=1
+      endif
+      h=cross(e1(:,j),e2(:,j));hn=sqrt(dot_product(h,h))
+      if(.not.(hn>=1e-4_dp))cycle
+      h=h*(direction(j)/hn)
+      t1v(:,j)=e1(:,j)+e2(:,j);t2v(:,j)=e2(:,j)-e1(:,j)
+      cs(j)=sqrt(dot_product(t1v(:,j),t1v(:,j)))/2;ss(j)=sqrt(dot_product(t2v(:,j),t2v(:,j)))/2
+      t1v(:,j)=cross(h,e1(:,j));t2v(:,j)=cross(h,e2(:,j))
+      s1(j)=sqrt(rn1);s2(j)=sqrt(rn2)
+      p=s1(j)*s2(j);a(j)=direction(j)*sqrt2*p*cs(j);b(j)=sqrt2*a(j)
+      q(j)=(rn1-rn2)/(s1(j)+s2(j))
+      yend(j)=q(j)*q(j)+2*p*ss(j)*ss(j)/(1+cs(j))
+      y0(j)=yend(j);if(direction(j)<0)y0(j)=q(j)*q(j)+2*p*(1+cs(j))
+      t(j)=tof(j)/(scl(j)*sqrt(scl(j)))
+      fast(j)=.true.;near(j)=.false.;infeas(j)=.false.
+      if(nrev(j)>0)then
+         ! Multiple revolutions: table starter, bracket and feasibility.
+         dc=sqrt((rn1-rn2)**2+4*rn1*rn2*ss(j)*ss(j));c=(rn1+rn2+dc)/2
+         k(j)=1
+         if(t(j)<nrev(j)*pi*c*sqrt(c)/sqrt2*(1-1e-12_dp))then
+            kw(j)=5
+         else
+            call mrev_table(a(j)/(sqrt2*c)/(1+sqrt(dc/c)),c,t(j),nrev(j),branch(j),tq(j),wb(j),kw(j))
+         endif
+         fast(j)=kw(j)==1
+         infeas(j)=kw(j)==5                             ! below the minimum time
+         cycle
+      endif
+      tp=sqrt(y0(j))*(y0(j)*sqrt2/3+a(j))
+      if(abs(t(j)-tp)<=4*epsilon(t(j))*tp)then
+         k(j)=0                                         ! parabola
+      else
+         dc=sqrt(q(j)*q(j)*(s1(j)+s2(j))**2+4*p*p*ss(j)*ss(j));c=(rn1+rn2+dc)/2
+         tau(j)=a(j)/(sqrt2*c)/(1+sqrt(dc/c))
+         if(t(j)>tp)then
+            k(j)=1;tq(j)=rcbrt(tp/t(j))
+         else
+            k(j)=-1;tq(j)=t(j)/tp;wb(j)=0
+            if(b(j)>0)then
+               sw=sqrt(y0(j)/(2*b(j)));dt=sqrt(1+sw*sw)
+               wb(j)=2*log1p_c(sw+sw*sw/(1+dt))
+            endif
+         endif
+         ! Near the parabola (outside the tables): series reversion in X.
+         near(j)=abs(t(j)-tp)<=.03_dp*tp
+         if(near(j))tq(j)=near_parabola_x(y0(j),a(j),b(j),t(j),tp)
+      endif
+   enddo
+   ! Stage 2: table starter and the rectangle's coordinate and width
+   ! (as fast_root in excali_one).
+   do j=1,nc
+      solve(j)=fast(j).and.k(j)/=0
+      if(.not.solve(j))cycle
+      if(nrev(j)>0)then
+         ! Bracket [0,v*] or [v*,pi]; pi-v near the upper pole (as excali_one).
+         c=tq(j);el=branch(j)*(c-wb(j))                ! distance to v*
+         if(c>.75_dp*pi)then
+            c=pi-c;k(j)=2
+         endif
+         kd(j)=k(j);el=min(el,c,pi-c)
+         fast(j)=el>0;solve(j)=fast(j)
+         kw(j)=kexp(el/16);x(j)=c
+         cycle
+      endif
+      if(near(j))then
+         c=0;if(tq(j)*k(j)>0)c=sqrt(abs(tq(j)))
+      elseif(k(j)>0)then
+         c=table_v(tau(j),tq(j))
+         if(c>.75_dp*pi)then
+            c=pi-c;k(j)=2
+         endif
+      else
+         c=table_w(tau(j),tq(j),wb(j))
+      endif
+      fast(j)=c>0;solve(j)=fast(j)
+      kd(j)=k(j)
+      if(abs(k(j))==1.and.c<.3_dp)then
+         kd(j)=0;c=k(j)*c*c
+         el=min(abs(c),.2_dp-abs(c))
+         if(k(j)<0.and.b(j)>0)el=min(el,wb(j)*wb(j)-abs(c))
+      elseif(k(j)>0)then
+         el=min(c,pi-c)
+      elseif(b(j)>0)then
+         el=min(2*c,wb(j)-c)
+      else
+         el=min(c,pi)
+      endif
+      if(.not.(el>0))fast(j)=.false.
+      solve(j)=fast(j)
+      kw(j)=kexp(el/16);x(j)=c
+   enddo
+   do j=1,nc
+      if(.not.solve(j))cycle
+      if(kd(j)>0)then
+         call sincos_half(x(j),hs(j),hc(j))
+      elseif(kd(j)<0)then
+         call shch(x(j)/2,hs(j),hc(j))
+      else
+         hs(j)=0;hc(j)=1
+      endif
+   enddo
+   ! Stage 3: one 8-node rectangle each.
+   do j=1,nc
+      if(solve(j))call rect_ratio(kd(j),x(j),hs(j),hc(j),kw(j),.true.,y0(j),yend(j),a(j),b(j),t(j),nrev(j), &
+         ddv(j),dev(j),scv(j))
+   enddo
+   do j=1,nc
+      if(.not.solve(j))cycle
+      c=x(j);dd=ddv(j);el=pow2m(kw(j))
+      if(scv(j).and.abs(dd)<.8_dp*el.and.dev(j)<=4*epsilon(c)*max(abs(c),merge(1e-2_dp,0._dp,kd(j)==0)))then
+         c=c+dd
+         if(kd(j)==0)then
+            k(j)=1;if(c<0)k(j)=-1
+            x(j)=sqrt(abs(c))
+            if(k(j)>0)then
+               call sincos_half(x(j),hs(j),hc(j))
+            else
+               call shch(x(j)/2,hs(j),hc(j))
+            endif
+            fast(j)=x(j)>0
+         else
+            call rotate(kd(j),c,dd/2,hs(j),hc(j));x(j)=c
+         endif
+      else
+         fast(j)=.false.
+      endif
+   enddo
+   ! Stage 4: velocities (as in excali_one), or excali_one for the rest.
+   do j=1,nc
+      if(infeas(j))then
+         v1(:,j)=ieee_value(0.0_dp,ieee_quiet_nan);v2(:,j)=v1(:,j);status(j)=5;half(j)=0
+         cycle
+      elseif(.not.fast(j))then
+         call excali_one(r1(:,j),r2(:,j),tof(j),direction(j),v1(:,j),v2(:,j),status(j),half(j),nrev(j),branch(j))
+         cycle
+      endif
+      p=sign(1.0_dp,a(j))
+      if(k(j)==0)then
+         c=1;s=0;y=y0(j)                                ! parabola: x=0
+      else
+         sw=hs(j);dt=hc(j)
+         if(k(j)>0)then
+            c=(dt-sw)*(dt+sw);s=(2*sw*dt)**2
+         else
+            c=1+2*sw*sw;s=-(2*sw*dt)**2
+         endif
+         if(k(j)==2)then
+            c=-c
+            y=y0(j)+2*b(j)*dt*dt
+            if(b(j)<0)y=yend(j)-2*b(j)*sw*sw
+         elseif(k(j)>0)then
+            if(b(j)>=0)then
+               y=y0(j)+2*b(j)*sw*sw
+            else
+               y=yend(j)-2*b(j)*dt*dt
+            endif
+         else
+            y=y0(j)-2*b(j)*sw*sw
+         endif
+      endif
+      dc=p*cs(j)-c
+      if(p*cs(j)*c>0.and.abs(p*cs(j)+c)>0.5_dp)dc=(s-ss(j)*ss(j))/(p*cs(j)+c)
+      y=sqrt2/sqrt(y*scl(j))
+      ratio=1/s1(j);dc=y*dc;p=y*p*cs(j)*q(j);s=y*ss(j)
+      vr1=dc-p*ratio;vt1=s*s2(j)*ratio
+      ratio=1/s2(j)
+      vr2=-(dc+p*ratio);vt2=s*s1(j)*ratio
+      v1(:,j)=vr1*e1(:,j)+vt1*t1v(:,j)
+      v2(:,j)=vr2*e2(:,j)+vt2*t2v(:,j)
+      status(j)=0;half(j)=0
+      if(.not.all(ieee_is_finite(v1(:,j))).or..not.all(ieee_is_finite(v2(:,j))))status(j)=-4
+   enddo
+   end subroutine batch_chunk
+
    ! Zero-height thin rectangle on [c-L,c+L], L=2**(-kr): Gauss-Legendre
    ! 8 (stage 1) or 3 (stage 2) nodes plus the two endpoints. dd=Q1/Q0
    ! locates the enclosed root; de=|Q2/Q0-dd**2|/L vanishes for a single
@@ -778,7 +1139,7 @@ contains
       real(dp),intent(out)::dd,de
       logical,intent(out)::sc
       real(dp),dimension(n1+2)::uu,wq,ct,st,f,f1
-      real(dp)::el,q0,q1,q2,r0,r1,r2,fa,fb,x,sh,ch,sn,cn,rs,yv,y1,ff,ff1,q,g,g1,ser,ser1,pk,y00,ab,mt,sg
+      real(dp)::el,q0,q1,q2,r0,r1,r2,fa,fb,x,sh,ch,sn,cn,rs,yv,y1,ff,ff1,q,g,g1,ser,ser1,pk,y00,ab,mt
       integer::np,j,n
       logical::lw,us
       el=pow2m(kr)
@@ -834,7 +1195,6 @@ contains
          enddo
       case default
          lw=b<0.and.c>=0.3_dp
-         sg=0;if(lw)sg=1
          do j=1,np
             x=c+el*uu(j)
             sh=hs*ct(j)+hc*st(j);ch=hc*ct(j)+hs*st(j)
@@ -1037,6 +1397,29 @@ contains
       endif
    end subroutine
 
+   ! sin(c/2) and cos(c/2) for 0<=c<=pi without a library call: reduction
+   ! to |y|<=pi/4 (pi/2-c/2 is exact there, Sterbenz) and Taylor polynomials
+   ! (truncation below 5e-17). Other c use the intrinsics.
+   elemental subroutine sincos_half(c,s,co)
+      real(dp),intent(in)::c
+      real(dp),intent(out)::s,co
+      real(dp),parameter::pio2_hi=1.5707963267948966_dp,pio2_lo=6.123233995736766e-17_dp
+      real(dp)::y,z,ps,pc
+      if(.not.(c>=0.and.c<=pi))then
+         s=sin(c/2);co=cos(c/2);return
+      endif
+      y=c/2
+      if(y>pio2_hi/2)y=(pio2_hi-y)+pio2_lo
+      z=y*y
+      ps=y+y*z*(-rf(3)+z*(rf(5)+z*(-rf(7)+z*(rf(9)+z*(-rf(11)+z*(rf(13)-z*rf(15)))))))
+      pc=1+z*(-rf(2)+z*(rf(4)+z*(-rf(6)+z*(rf(8)+z*(-rf(10)+z*(rf(12)+z*(-rf(14)+z*rf(16))))))))
+      if(c/2>pio2_hi/2)then
+         s=pc;co=ps
+      else
+         s=ps;co=pc
+      endif
+   end subroutine
+
    ! 2**(-k) (|k|<1000) and 1-exponent(x) (x>0) from the bit pattern;
    ! gfortran implements the scale/exponent intrinsics as library calls.
    elemental real(dp) function pow2m(k) result(y)
@@ -1059,8 +1442,8 @@ contains
       endif
    end function
 
-   ! asinh(s), s>=0, to ~2e-5 for singularity distances: series below 1/2,
-   ! else log(s+sqrt(1+s**2)) with a fast logarithm.
+   ! asinh(s), s>=0, to ~1e-4 for singularity distances (only the rectangle
+   ! width depends on them): series below 1/2, else a polynomial logarithm.
    elemental real(dp) function rasinh(s) result(y)
       real(dp),intent(in)::s
       real(dp)::q
@@ -1068,8 +1451,29 @@ contains
          q=s*s
          y=s*(1+q*(-1._dp/6+q*(3._dp/40+q*(-5._dp/112+q*(35._dp/1152)))))
       else
-         y=rlog(s+sqrt(1+s*s))
+         y=qlog(s+sqrt(1+s*s))
       endif
+   end function
+
+   ! Natural logarithm to ~1e-5 absolute: exponent bits and a quintic in the
+   ! mantissa (Abramowitz and Stegun 4.1.44); no division.
+   elemental real(dp) function qlog(x) result(y)
+      real(dp),intent(in)::x
+      real(dp),parameter::ln2=log(2._dp)
+      integer(int64)::i
+      real(dp)::u
+      if(.not.(ieee64.and.x>=tiny(x).and.x<=huge(x)))then
+         y=log(x);return
+      endif
+      i=transfer(x,i)
+      u=transfer(ior(iand(i,4503599627370495_int64),4607182418800017408_int64),u)-1
+      y=(shiftr(i,52)-1023)*ln2+u*(.99949556_dp+u*(-.49190896_dp+u*(.28947478_dp+u*(-.13606275_dp+u*.03215845_dp))))
+   end function
+
+   ! asin(x), 0<=x<=1, to ~5e-5 (Abramowitz and Stegun 4.4.45).
+   elemental real(dp) function rasin(x) result(y)
+      real(dp),intent(in)::x
+      y=pi/2-sqrt(1-x)*(1.5707288_dp+x*(-.2121144_dp+x*(.0742610_dp-x*.0187293_dp)))
    end function
 
    ! Natural logarithm to ~1e-9 relative: exponent bits, mantissa reduced to
@@ -1092,9 +1496,11 @@ contains
    end function
 
    ! Cube root to ~2e-5 for the closed-form starters (the contour sets the
-   ! accuracy): exponent/3 bit estimate (3%) and one Halley correction.
-   elemental real(dp) function rcbrt(x) result(y)
+   ! accuracy): exponent/3 bit estimate (3%) and one Halley correction; a
+   ! second correction (fine) gives ~1e-15.
+   elemental real(dp) function rcbrt(x,fine) result(y)
       real(dp),intent(in)::x
+      logical,optional,intent(in)::fine
       real(dp)::w,r
       if(.not.(ieee64.and.x>=tiny(x).and.x<=huge(x)))then
          y=cbrt_c(x);return
@@ -1102,6 +1508,12 @@ contains
       y=transfer(transfer(x,0_int64)/3+3071306045661749710_int64,y)
       w=1/y;r=(x*w)*(w*w)
       y=y*(1+2*r)/(2+r)
+      if(present(fine))then
+         if(fine)then
+            w=1/y;r=(x*w)*(w*w)
+            y=y*(1+2*r)/(2+r)
+         endif
+      endif
    end function
 
    ! x from a rectangle coordinate: X=k*x**2 near the parabola (series), else x
@@ -1116,6 +1528,152 @@ contains
          if(k*c>=0)x=sqrt(k*c)
       endif
    end function
+
+   ! Zero-revolution root v from the tables at tau=lam/(1+sqrt(1-lam**2)) and
+   ! phi=(tp/t)**(1/3): A=(pi-v)/phi for phi<=1/2, B=v**2/(1-phi) above, by
+   ! local 4x4 cubic Lagrange interpolation. 0 outside the tables.
+   pure real(dp) function table_v(tau,phi) result(v)
+      real(dp),intent(in)::tau,phi
+      real(dp)::u,wt(4),ws(4),r(4)
+      integer::i,j,h
+      v=0
+      if(.not.(abs(tau)<=tab_tmax.and.phi>0.and.phi<=.99_dp))return
+      u=(tau+tab_tmax)*((tab_n-1)/(2*tab_tmax))
+      i=min(max(int(u)-1,0),tab_n-4);call lagrange4(u-i,wt)
+      h=1;u=phi*(2*(tab_n-1))
+      if(phi>.5_dp)then
+         h=2;u=u-(tab_n-1)
+      endif
+      j=min(max(int(u)-1,0),tab_n-4);call lagrange4(u-j,ws)
+      ! Four independent column sums, then one combination (short chains).
+      r=wt(1)*tab(i+1,j+1:j+4,h)+wt(2)*tab(i+2,j+1:j+4,h)+wt(3)*tab(i+3,j+1:j+4,h)+wt(4)*tab(i+4,j+1:j+4,h)
+      u=(ws(1)*r(1)+ws(2)*r(2))+(ws(3)*r(3)+ws(4)*r(4))
+      if(h==1)then
+         v=pi-phi*u
+      else
+         v=sqrt(max(u*(1-phi),0._dp))
+      endif
+      if(.not.(v>0.and.v<pi))v=0
+   end function
+
+   ! Zero-revolution hyperbolic root w from the tables at tau and u=t/tp
+   ! (see excali_tables.inc); wb is the short-way branch point. 0 outside.
+   pure real(dp) function table_w(tau,u,wb) result(w)
+      real(dp),intent(in)::tau,u,wb
+      real(dp)::g,p,wt(4),ws(4),r(4)
+      integer::i,j,h
+      w=0
+      if(.not.(abs(tau)>=tabh_tmin.and.abs(tau)<=tabh_tmax.and.u<=.99_dp))return
+      if(tau>0)then
+         h=1;p=u
+         if(.not.(p>=tabh_ps))return
+         g=(p-tabh_ps)*((tab_n-1)/(1-tabh_ps))
+      else
+         h=2;p=rcbrt(u)
+         if(.not.(p>=tabh_pl))return
+         g=(p-tabh_pl)*((tab_n-1)/(1-tabh_pl))
+      endif
+      j=min(max(int(g)-1,0),tab_n-4);call lagrange4(g-j,ws)
+      g=(abs(tau)-tabh_tmin)*((tab_n-1)/(tabh_tmax-tabh_tmin))
+      if(h==2)g=(tab_n-1)-g
+      i=min(max(int(g)-1,0),tab_n-4);call lagrange4(g-i,wt)
+      r=wt(1)*tabh(i+1,j+1:j+4,h)+wt(2)*tabh(i+2,j+1:j+4,h)+wt(3)*tabh(i+3,j+1:j+4,h)+wt(4)*tabh(i+4,j+1:j+4,h)
+      g=(ws(1)*r(1)+ws(2)*r(2))+(ws(3)*r(3)+ws(4)*r(4))
+      if(h==1)then
+         w=sqrt(max(g*(1-u),0._dp))*wb
+         if(.not.(w<wb))w=0
+      else
+         w=sqrt(max(g*(1-u),0._dp))*(1-rlog(u))
+      endif
+      if(.not.(w>0))w=0
+   end function
+
+   ! Near the parabola, X = k*x**2 (v**2 for an ellipse, -w**2 for a
+   ! hyperbola) from the series T = T0 + T1*X + T2*X**2 + ..., with
+   ! y = y0 + b*X*(1/2 - X/24 + ...) and y*F + a from the parabolic series of
+   ! F, reverted to second order: X = d/T1 - T2*d**2/T1**3, d = t - T0.
+   pure real(dp) function near_parabola_x(y0,a,b,t,tp) result(xx)
+      real(dp),intent(in)::y0,a,b,t,tp
+      real(dp)::q0,q1,q2,g0,g1,g2,p0,p1,p2,t1,t2,d
+      g0=pser2(10);g1=pser2(9);g2=pser2(8)
+      q0=sqrt(y0);q1=b/(4*q0);q2=(-b/24-q1*q1)/(2*q0)
+      p0=y0*g0+a;p1=y0*g1+b/2*g0;p2=y0*g2+b/2*g1-b/24*g0
+      t1=q0*p1+q1*p0;t2=q0*p2+q1*p1+q2*p0
+      d=t-tp
+      xx=d/t1-t2*d*d/(t1*t1*t1)
+   end function
+
+   ! Multi-revolution table starter: tau and the semiperimeter sl, time t,
+   ! revolutions m and branch br. stat=5: t is below the tabulated minimum
+   ! time by more than the table error (infeasible); stat=1: v is the
+   ! branch root estimate and vs the minimum-time location; stat=0: outside
+   ! the tables or too close to t_min. Slices in mu=1/m by 4-point Lagrange.
+   pure subroutine mrev_table(tau,sl,t,m,br,v,vs,stat)
+      real(dp),intent(in)::tau,sl,t
+      integer,intent(in)::m,br
+      real(dp),intent(out)::v,vs
+      integer,intent(out)::stat
+      real(dp),parameter::margin=1e-6_dp
+      real(dp)::u,wt(4),wc(4),ws(4),wm(4),mu,cm,r,sig
+      integer::i,ic,j,k,km(4),nk,ia,jb,kk
+      stat=0;v=0;vs=0
+      if(.not.(abs(tau)<=tab_tmax))return
+      mu=1._dp/m;nk=0
+      do k=1,mr_nm
+         if(mr_m(k)==m)then
+            nk=1;km(1)=k;wm(1)=1
+         endif
+      enddo
+      if(nk==0)then
+         kk=mr_nm-1
+         do k=1,mr_nm-1
+            if(mu>=mr_mu(k+1))then
+               kk=k;exit
+            endif
+         enddo
+         kk=min(max(kk-1,1),mr_nm-3);nk=4
+         do ia=1,4
+            km(ia)=kk+ia-1;wm(ia)=1
+            do jb=1,4
+               if(jb/=ia)wm(ia)=wm(ia)*(mu-mr_mu(kk+jb-1))/(mr_mu(kk+ia-1)-mr_mu(kk+jb-1))
+            enddo
+         enddo
+      endif
+      u=(tau+tab_tmax)*((mr_nc-1)/(2*tab_tmax))
+      ic=min(max(int(u)-1,0),mr_nc-4);call lagrange4(u-ic,wc)
+      cm=0
+      do k=1,nk
+         cm=cm+wm(k)*(wc(1)*mr_c(ic+1,km(k))+wc(2)*mr_c(ic+2,km(k))+wc(3)*mr_c(ic+3,km(k))+wc(4)*mr_c(ic+4,km(k)))
+         vs=vs+wm(k)*(wc(1)*mr_s(ic+1,km(k))+wc(2)*mr_s(ic+2,km(k))+wc(3)*mr_s(ic+3,km(k))+wc(4)*mr_s(ic+4,km(k)))
+      enddo
+      r=cm*sqrt(sl)*rcbrt(m/t,.true.)         ! (t_min/t)**(1/3)
+      if(r>1+margin)then
+         stat=5;return
+      endif
+      if(r>=1-margin)return
+      sig=br*sqrt(1-r)
+      u=(tau+tab_tmax)*((mr_nt-1)/(2*tab_tmax))
+      i=min(max(int(u)-1,0),mr_nt-4);call lagrange4(u-i,wt)
+      u=(sig+1)*((mr_ns-1)/2._dp)
+      j=min(max(int(u)-1,0),mr_ns-4);call lagrange4(u-j,ws)
+      do k=1,nk
+         do jb=1,4
+            v=v+wm(k)*ws(jb)*(wt(1)*mr_v(i+1,j+jb,km(k))+wt(2)*mr_v(i+2,j+jb,km(k)) &
+               +wt(3)*mr_v(i+3,j+jb,km(k))+wt(4)*mr_v(i+4,j+jb,km(k)))
+         enddo
+      enddo
+      if(v>0.and.v<pi.and.vs>0.and.vs<pi.and.(v-vs)*br>0)stat=1
+   end subroutine
+
+   ! Cubic Lagrange weights on the nodes 0,1,2,3 at p.
+   pure subroutine lagrange4(p,w)
+      real(dp),intent(in)::p
+      real(dp),intent(out)::w(4)
+      real(dp)::p0,p1,p2,p3
+      p0=p;p1=p-1;p2=p-2;p3=p-3
+      w(1)=-(1._dp/6)*(p1*p2)*p3;w(2)=.5_dp*(p0*p2)*p3
+      w(3)=-.5_dp*(p0*p1)*p3;w(4)=(1._dp/6)*(p0*p1)*p2
+   end subroutine
 
    !> Cubic Hermite on [0,1]: values p0,p1 and slopes m0,m1 at 0 and 1.
    pure real(dp) function hermite(u,p0,m0,p1,m1)
