@@ -1,9 +1,9 @@
 ! Analytic circular, parabolic and hyperbolic truth, extreme unit scales,
 ! both directions, multirevolution and exact antipodal transfer-plane API.
-program test_elam_standalone
+program test_excali_standalone
    use iso_fortran_env, only: real64
    use ieee_arithmetic
-   use elam_solver
+   use excali_solver
    implicit none
    integer,parameter::dp=real64
    real(dp),parameter::pi=acos(-1._dp)
@@ -18,7 +18,7 @@ program test_elam_standalone
          found=0
          do b=-1,1,2
             if(m==0.and.b==1)cycle
-            call elam_one(r1,r2,t,d,v1,v2,s,h,m,b)
+            call excali_one(r1,r2,t,d,v1,v2,s,h,m,b)
             if(s/=0.and.s/=1)error stop 'circular status'
             if(max(norm2(v1-w1),norm2(v2-w2))<1e-10_dp)found=found+1
          enddo
@@ -33,13 +33,13 @@ program test_elam_standalone
          scale=1e-150_dp;mu=1e-300_dp
       endif
       tu=exp(1.5_dp*log(scale)-.5_dp*log(mu));vu=exp(.5_dp*(log(mu)-log(scale)))
-      call elam_solve([scale,0._dp,0._dp],[-scale,0._dp,0._dp],pi*tu,mu,1,0,-1,v1,v2,s,[0._dp,0._dp,1._dp])
+      call excali_solve([scale,0._dp,0._dp],[-scale,0._dp,0._dp],pi*tu,mu,1,0,-1,v1,v2,s,[0._dp,0._dp,1._dp])
       if(s/=0)error stop 'antipodal status'
       if(norm2(v1/vu-[0._dp,1._dp,0._dp])>1e-10_dp.or.norm2(v2/vu-[0._dp,-1._dp,0._dp])>1e-10_dp) &
          error stop 'antipodal scaled truth'
    enddo
    r1=[1._dp,0._dp,0._dp];r2=[0._dp,2._dp,0._dp]
-   call elam_solve(r1,r2,4*sqrt(2._dp)/3,1._dp,1,0,-1,v1,v2,s)
+   call excali_solve(r1,r2,4*sqrt(2._dp)/3,1._dp,1,0,-1,v1,v2,s)
    if(s/=0.or.norm2(v1-[0._dp,sqrt(2._dp),0._dp])>1e-10_dp.or. &
       norm2(v2-[-1/sqrt(2._dp),1/sqrt(2._dp),0._dp])>1e-10_dp)error stop 'parabolic truth'
    do i=1,100
@@ -49,12 +49,12 @@ program test_elam_standalone
       w1=[0._dp,sqrt((e+1)/(a*(e-1))),0._dp]
       w2=[-sin(nu),e+cos(nu),0._dp]/sqrt(a*(e*e-1))
       t=a**1.5_dp*(e*sinh(hh)-hh)
-      call elam_one(r1,r2,t,1,v1,v2,s,h,0,-1)
+      call excali_one(r1,r2,t,1,v1,v2,s,h,0,-1)
       if(s/=0.or.norm2(v1-w1)>1e-10_dp.or.norm2(v2-w2)>1e-10_dp)error stop 'hyperbolic truth'
    enddo
-   call elam_one(r1,r2,-1._dp,1,v1,v2,s,h)
+   call excali_one(r1,r2,-1._dp,1,v1,v2,s,h)
    if(s/=-1)error stop 'invalid time'
-   call elam_solve([1._dp,0._dp,0._dp],[-1._dp,0._dp,0._dp],pi,1._dp,1,0,-1,v1,v2,s)
+   call excali_solve([1._dp,0._dp,0._dp],[-1._dp,0._dp,0._dp],pi,1._dp,1,0,-1,v1,v2,s)
    if(s/=-2)error stop 'plane required'
-   print *, 'PASS: eLam independent conic truth, branches, antipodal geometry, units and input statuses'
+   print *, 'PASS: EXCALI independent conic truth, branches, antipodal geometry, units and input statuses'
 end program

@@ -25,10 +25,10 @@ jobs:
           fi
           echo "FC=$fc" >> "$GITHUB_ENV"; "$fc" --version | head -1; uname -m
       - name: Configure
-        run: cmake -S . -B build -DCMAKE_BUILD_TYPE=Release -DELAM_OPENMP=${{ matrix.openmp }}
+        run: cmake -S . -B build -DCMAKE_BUILD_TYPE=Release -DEXCALI_OPENMP=${{ matrix.openmp }}
       - name: Build
         run: cmake --build build -j
       - name: Test
         run: ctest --test-dir build --output-on-failure
       - name: Example
-        run: ./build/elam_example
+        run: ./build/excali_example

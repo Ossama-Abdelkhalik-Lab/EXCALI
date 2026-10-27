@@ -1,10 +1,10 @@
-! Training workload for profile-guided builds (ELAM_PGO=GENERATE): random
+! Training workload for profile-guided builds (EXCALI_PGO=GENERATE): random
 ! transfers across the solver's regimes. Times are drawn relative to the
 ! parabolic time, so short/long-way ellipses, hyperbolas, near-parabolic
 ! arcs and multi-revolution branches (feasible or not) all occur.
 program pgo_train
    use iso_fortran_env, only: real64
-   use elam_solver, only: elam_solve
+   use excali_solver, only: excali_solve
    implicit none
    integer,parameter::dp=real64
    real(dp),parameter::pi=acos(-1._dp)
@@ -28,7 +28,7 @@ program pgo_train
       else
          tof=tp*exp(4*u(4)-1.5_dp)
       endif
-      call elam_solve(r1,r2,tof,1._dp,d,m,br,v1,v2,status)
+      call excali_solve(r1,r2,tof,1._dp,d,m,br,v1,v2,status)
       if(status==0.or.status==1)solved=solved+1
    enddo
    print '(a,i0,a)','pgo_train: ',solved,' of 400000 transfers solved'

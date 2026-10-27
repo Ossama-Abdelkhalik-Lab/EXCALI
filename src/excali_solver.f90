@@ -1,17 +1,17 @@
-! eLam: finite rectangular-contour Lambert root extraction across conics.
+! EXCALI (EXact Cauchy-Analytic Lambert Integration): finite rectangular-contour Lambert root extraction across conics.
 ! Extended from Exact v2.2's thin-rectangle ratio. The root comes from the
 ! zero-height limit of that rectangle (real Gauss-Legendre quadrature of
 ! 1/(T-t) and its derivative), applied in one or two fixed stages without a
 ! Newton polish. Geometry, half-anomaly time functions, derivatives and
 ! closed-form starters are adapted from ConfluentContour's former contour_simple. No
 ! confluent/Householder root steps and no calls to another Lambert solver.
-module elam_solver
+module excali_solver
    use iso_fortran_env, only: real64, int64
    use ieee_arithmetic, only: ieee_is_finite, ieee_value, ieee_quiet_nan
    use iso_c_binding, only: c_double
    implicit none
    private
-   public :: elam_one, elam_solve
+   public :: excali_one, excali_solve
    integer,parameter :: dp=real64
    real(dp),parameter :: pi=acos(-1.0_dp),sqrt2=sqrt(2.0_dp),rsqrt2=1/sqrt2
    ! The bit-pattern helpers (pow2m, kexp, rlog, rcbrt) assume IEEE-754
@@ -73,7 +73,7 @@ module elam_solver
 
 contains
 
-   subroutine elam_solve(r1,r2,tof,mu,direction,nrev,branch,v1,v2,status,plane_normal)
+   subroutine excali_solve(r1,r2,tof,mu,direction,nrev,branch,v1,v2,status,plane_normal)
       real(dp),intent(in)::r1(3),r2(3),tof,mu
       integer,intent(in)::direction,nrev,branch
       real(dp),intent(out)::v1(3),v2(3)
@@ -92,13 +92,13 @@ contains
          vscale=exp(.5_dp*(log(mu)-log(sc)))
       endif
       if(.not.ieee_is_finite(tt).or..not.ieee_is_finite(vscale).or.tt<=0.or.vscale<=0)return
-      call elam_one(r1/sc,r2/sc,tt,direction,v1,v2,status,half,nrev,branch,plane_normal)
+      call excali_one(r1/sc,r2/sc,tt,direction,v1,v2,status,half,nrev,branch,plane_normal)
       if(status==0.or.status==1)then
          v1=v1*vscale;v2=v2*vscale
       endif
    end subroutine
 
-   subroutine elam_one(r1,r2,tof,direction,v1,v2,status,half,nrev,branch,plane_normal)
+   subroutine excali_one(r1,r2,tof,direction,v1,v2,status,half,nrev,branch,plane_normal)
    real(dp),intent(in)          :: r1(3),r2(3),tof
    integer,intent(in)           :: direction
    real(dp),intent(out)         :: v1(3),v2(3)
@@ -119,7 +119,7 @@ contains
    if(abs(direction)/=1.or.m<0.or.abs(br)/=1.or..not.(tof>0).or..not.ieee_is_finite(tof))return
 
    !======= Geometry, normalized by the larger radius =======
-   ! Normalized entry (elam_solve pre-scales): plain dot products suffice.
+   ! Normalized entry (excali_solve pre-scales): plain dot products suffice.
    rn1=sqrt(dot_product(r1,r1));rn2=sqrt(dot_product(r2,r2))
    if(.not.(rn1>0.and.rn2>0).or..not.ieee_is_finite(rn1+rn2))return
    ! Correctly rounded unit vectors; the larger normalized radius is exactly 1.
@@ -762,7 +762,7 @@ contains
          enddo
       end function
 
-   end subroutine elam_one
+   end subroutine excali_one
 
    ! Zero-height thin rectangle on [c-L,c+L], L=2**(-kr): Gauss-Legendre
    ! 8 (stage 1) or 3 (stage 2) nodes plus the two endpoints. dd=Q1/Q0
@@ -1129,4 +1129,4 @@ contains
    w=[u(2)*v(3)-u(3)*v(2),u(3)*v(1)-u(1)*v(3),u(1)*v(2)-u(2)*v(1)]
    end function cross
 
-end module elam_solver
+end module excali_solver

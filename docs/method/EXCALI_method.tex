@@ -17,7 +17,7 @@
 \newcommand{\code}[1]{\texttt{#1}}
 \newcommand{\Q}{\mathcal{Q}}
 
-\title{How eLam works: from the paper to the solver}
+\title{How EXCALI works: from the paper to the solver}
 \author{Matthew Staber}
 \date{October 24, 2026}
 
@@ -26,20 +26,20 @@
 
 \section{Overview}
 
-eLam solves Lambert's problem with the contour-integral idea of Negrete and Abdelkhalik, shrunk to a rectangle of zero height so that it needs only real arithmetic. Given two positions, a time of flight and a revolution count, it returns both endpoint velocities for elliptic, parabolic, hyperbolic and multi-revolution transfers.
+EXCALI (EXact Cauchy-Analytic Lambert Integration) solves Lambert's problem with the contour-integral idea of Negrete and Abdelkhalik, shrunk to a rectangle of zero height so that it needs only real arithmetic. Given two positions, a time of flight and a revolution count, it returns both endpoint velocities for elliptic, parabolic, hyperbolic and multi-revolution transfers.
 
 The root of the time equation is never iterated toward. A closed-form starter places an interval around it. One 8-node quadrature then reads the root off as a ratio of two sums. A 3-node quadrature runs only when the first one's own error estimate is above rounding. When the starter misses (0 to 0.8\% of solves), further rectangles run inside a shrinking bracket. No Newton step is taken anywhere in the root solve.
 
-On the mixed benchmark of \href{https://github.com/Ossama-Abdelkhalik-Lab/Lamberts-Comparison}{Lamberts-Comparison}, eLam takes 0.91 times ivLam's time overall on Apple silicon and 1.18 times on a Linux x86-64 runner. Its maximum errors are lower than ivLam's in 8 of the 10 feasible classes, and both are at rounding level in the other two.
+On the mixed benchmark of \href{https://github.com/Ossama-Abdelkhalik-Lab/Lamberts-Comparison}{Lamberts-Comparison}, EXCALI takes 0.91 times ivLam's time overall on Apple silicon and 1.18 times on a Linux x86-64 runner. Its maximum errors are lower than ivLam's in 8 of the 10 feasible classes, and both are at rounding level in the other two.
 
 The chain of versions is:
 \begin{enumerate}
   \item \textbf{The paper} (Negrete and Abdelkhalik, JGCD 2025): the root as a ratio of two contour integrals over a circle, using the trapezoidal rule.
   \item \textbf{Exact v1}: the paper's circles in code, a coarse circle and then a fine one, with complex trigonometry.
   \item \textbf{Exact v2.2}: one thin rectangle around a guess from a lookup table, plus one Newton step. Zero-revolution ellipses only.
-  \item \textbf{eLam}: the zero-height limit of that rectangle, staged, with closed-form starters and coverage of every conic and revolution count.
+  \item \textbf{EXCALI}: the zero-height limit of that rectangle, staged, with closed-form starters and coverage of every conic and revolution count.
 \end{enumerate}
-The Exact originals are preserved unchanged in the eLam repository as \code{original/}.
+The Exact originals are preserved unchanged in the EXCALI repository as \code{original/}.
 
 \section{The starting point: the paper}
 
@@ -69,7 +69,7 @@ The paper's examples use a large circle followed by a second circle of radius 2 
 
 \paragraph{What the paper leaves open.} It gives no rule that guarantees a contour holds exactly one pole, apart from the zero-revolution ellipse. It covers neither near-parabolic cancellation nor transfers near $180^\circ$. It also does not avoid complex trigonometry at every node, which dominates the cost.
 
-\section{From the paper to eLam}
+\section{From the paper to EXCALI}
 
 Each step keeps the paper's exact ratio and changes how its two integrals are taken. The steps below are in the order they were made.
 
@@ -84,7 +84,7 @@ Exact v2.2 replaced the circles with one thin rectangle $[a,b]\times[-\varepsilo
 The nodes sit a fixed distance from the real axis. Exact v2.2 therefore stored every node-dependent factor for 125 precomputed rectangles, and took the guess from a $64\times32$ lookup table. One Newton step followed. It reached 99\,ns per problem with errors comparable to ivLam, but only for zero-revolution ellipses. It was supplied in two builds of the same algorithm: \code{exact\_ser.F90}, a scalar kernel with a sine table compiled without vectorization, and \code{exact\_vect.F90}, a branch-free kernel with a polynomial sine that processes blocks of 32 problems with SIMD instructions. Both are kept byte for byte in \code{original/}.
 
 \subsection*{Step 3: the zero-height limit}
-This is the step that defines eLam. Expand each node of v2.2's discrete rectangle in its height $\varepsilon$, using $f(x+i\varepsilon) = f(x) + i\varepsilon f'(x) + O(\varepsilon^2)$ for real $f$ on the real axis:
+This is the step that defines EXCALI. Expand each node of v2.2's discrete rectangle in its height $\varepsilon$, using $f(x+i\varepsilon) = f(x) + i\varepsilon f'(x) + O(\varepsilon^2)$ for real $f$ on the real axis:
 \begin{itemize}
   \item \textbf{Top edge, $b$ to $a$:} Gauss--Legendre with half-width $L$ gives an imaginary part of $-\varepsilon L\sum_i w_i f'(x_i)$.
   \item \textbf{Right side, $b$ to $b+i\varepsilon$:} $f(b)$ times $i\varepsilon$, imaginary part $\varepsilon f(b)$.
@@ -108,17 +108,17 @@ and the constant $R$ drops out of $\Q$. The pole parts give the ratio $p-c$ exac
 The limit removes the complex arithmetic. Each node needs $T$ and $T'$ at a real point, and $T'$ has a closed form. The rectangle no longer has to be precomputed, so it can be centred anywhere and sized to the problem.
 
 \subsection*{Step 4: real coordinates instead of $z$}
-eLam works in the half anomaly $v = \sqrt{z}/2$ (so $z = 4v^2$) for ellipses and $w = \sqrt{-z}/2$ for hyperbolas. In $v$, with the larger radius normalized to 1 and $\mu=1$:
+EXCALI works in the half anomaly $v = \sqrt{z}/2$ (so $z = 4v^2$) for ellipses and $w = \sqrt{-z}/2$ for hyperbolas. In $v$, with the larger radius normalized to 1 and $\mu=1$:
 \begin{equation}
   y(v) = y_0 + 2b\sin^2(v/2), \qquad T(v) = \sqrt{y}\,\big(y\,F(v) + a\big), \qquad F(v) = \frac{v - \sin v\cos v + m\pi}{\sqrt2\,\sin^3 v}.
 \end{equation}
-Here $a$ is the paper's $A$ and $b = \sqrt2\,a$. For $b<0$ the same $y$ is written from its far end as $y_\text{end} - 2b\cos^2(v/2)$, which Exact v2.2 already did to avoid cancellation. The pole of $T$ at $v=\pi$ ($z=4\pi^2$) and, for $m>0$, at $v=0$ is explicit. Near the parabola, eLam switches to $X=\pm x^2$ with $T$ as a power series, so no square root of $z$ is taken at $z=0$. It uses $\pi-v$ near the upper pole and $\sqrt{y}$ for very short hyperbolas.
+Here $a$ is the paper's $A$ and $b = \sqrt2\,a$. For $b<0$ the same $y$ is written from its far end as $y_\text{end} - 2b\cos^2(v/2)$, which Exact v2.2 already did to avoid cancellation. The pole of $T$ at $v=\pi$ ($z=4\pi^2$) and, for $m>0$, at $v=0$ is explicit. Near the parabola, EXCALI switches to $X=\pm x^2$ with $T$ as a power series, so no square root of $z$ is taken at $z=0$. It uses $\pi-v$ near the upper pole and $\sqrt{y}$ for very short hyperbolas.
 
 \subsection*{Step 5: closed-form starters instead of a table}
-The guess only has to put the root inside an interval that is free of other singularities. eLam replaces v2.2's lookup table with closed-form starters for each regime. Examples are a cubic Hermite in $(t_p/t)^{1/3}$ between the parabola and the pole of an ellipse, and the pole asymptote $T \approx \pi y^{3/2}/(\sqrt2\,d^3)$ when the root is near $v=\pi$. There are no tables of guesses and no initialization.
+The guess only has to put the root inside an interval that is free of other singularities. EXCALI replaces v2.2's lookup table with closed-form starters for each regime. Examples are a cubic Hermite in $(t_p/t)^{1/3}$ between the parabola and the pole of an ellipse, and the pole asymptote $T \approx \pi y^{3/2}/(\sqrt2\,d^3)$ when the root is near $v=\pi$. There are no tables of guesses and no initialization.
 
 \subsection*{Step 6: an interval sized from the singularities}
-The convergence rate $(L/2R)^{2n}$ depends on $R$, so eLam computes $R$ analytically. Candidates are the branch points of $\sqrt{y}$, the mirror root of the even zero-revolution time function and the other multi-revolution branch. A pole of $T$ contributes the two complex roots of $T=t$ beside it, at $\sqrt3$ times the pole distance. Stage~1 uses half-width $L\approx R/4$, so $(L/2R)^{16} = (1/8)^{16} \approx 4\times10^{-15}$: rounding level in a single pass for most cases.
+The convergence rate $(L/2R)^{2n}$ depends on $R$, so EXCALI computes $R$ analytically. Candidates are the branch points of $\sqrt{y}$, the mirror root of the even zero-revolution time function and the other multi-revolution branch. A pole of $T$ contributes the two complex roots of $T=t$ beside it, at $\sqrt3$ times the pole distance. Stage~1 uses half-width $L\approx R/4$, so $(L/2R)^{16} = (1/8)^{16} \approx 4\times10^{-15}$: rounding level in a single pass for most cases.
 
 \subsection*{Step 7: an error estimate instead of Newton}
 The ratio has a second, independent form. For one pole, $\Q\big[((x-c)^2f)'\big]/\Q[f'] = (p-c)^2$ exactly, so
@@ -128,7 +128,7 @@ The ratio has a second, independent form. For one pole, $\Q\big[((x-c)^2f)'\big]
 is zero for a pure pole and measures the remainder. When $d_e$ is above rounding, a second quadrature with only 3 nodes runs around the first estimate, with $L \approx 16\,d_e$. That is far inside $R$, so it converges like $(L/2R)^6$. This replaces v2.2's Newton step; no derivative step is taken toward the root.
 
 \subsection*{Step 8: multiple revolutions, one branch at a time}
-The paper finds both branches at once from four moments on a circle over the whole band. eLam instead decides feasibility first. Every ellipse through both points has $a \ge s/2$, so $t < m\cdot2\pi\,(s/2)^{3/2}$ is rejected before $T$ is evaluated. Otherwise the minimum time comes from one or two Halley steps on $T'(v)=0$. Those steps stop as soon as their error bound decides feasibility, and they also bracket each branch. Each branch then gets its own one-pole interval and the same quadrature as zero revolutions.
+The paper finds both branches at once from four moments on a circle over the whole band. EXCALI instead decides feasibility first. Every ellipse through both points has $a \ge s/2$, so $t < m\cdot2\pi\,(s/2)^{3/2}$ is rejected before $T$ is evaluated. Otherwise the minimum time comes from one or two Halley steps on $T'(v)=0$. Those steps stop as soon as their error bound decides feasibility, and they also bracket each branch. Each branch then gets its own one-pole interval and the same quadrature as zero revolutions.
 
 \subsection*{Step 9: a contour-only safeguard}
 Every accepted interval must show a sign change of $T-t$ and contain no pole of $T$. When a starter misses, the estimate re-centres the interval or the interval widens, for up to five passes. If that still fails (0 to 0.8\% of solves), the solve continues as a bracketed contour. Each step is again a zero-height rectangle centred on the current point. $T$ is monotone on the branch, so the sign of $T-t$ at the centre and the rectangle's own sign test shrink the bracket $[\text{lo},\text{hi}]$; an estimate outside the bracket is replaced by its midpoint. Near the parabola its rectangles use the series coordinate $X$, as the main stages do. A rectangle without a sign change moves the bracket only when its own ratio agrees that the root is outside, because next to the root both signals are rounding noise. Each rectangle also stays inside the bracket as it was before the step, so it never reaches the other branch beyond $t_\text{min}$. A rescued case takes 3 to 6 rectangles. Very short hyperbolas ($t<0.1\,t_p$) use the same bracketed contour in $Y=\sqrt{y}$, because in $w$ the root sits within rounding of the branch point.
@@ -137,16 +137,16 @@ The safeguard cannot simply be deleted: with it disabled, 0.02 to 0.77\% of each
 
 \section{The algorithm step by step}
 
-One call of \code{elam\_one} runs a fixed pipeline, and most solves take its shortest path: starter, one 8-node stage, velocities.
+One call of \code{excali\_one} runs a fixed pipeline, and most solves take its shortest path: starter, one 8-node stage, velocities.
 
 \begin{figure}[p]
   \centering
   \includegraphics[width=\linewidth,height=0.85\textheight,keepaspectratio]{flowchart.png}
-  \caption{eLam solve flow. The side branches are rare: stage 2 runs in 0.2 to 17\% of solves, depending on the class, and the bracketed contour in at most 0.8\%.}
+  \caption{EXCALI solve flow. The side branches are rare: stage 2 runs in 0.2 to 17\% of solves, depending on the class, and the bracketed contour in at most 0.8\%.}
 \end{figure}
 
 \begin{enumerate}
-  \item \textbf{Normalize and check the geometry.} Divide by the larger radius, so it is exactly 1, and form unit vectors $e_1$, $e_2$ and the plane normal $h = e_1\times e_2$. Exactly antipodal endpoints need a supplied \code{plane\_normal}; coincident or same-ray endpoints return a status. Then form $|\cos(\theta/2)|$, $|\sin(\theta/2)|$, $a$, $b$, $y_0$, $y_\text{end}$ and $y(\pi)$. The dimensional \code{elam\_solve} scales through logarithms first, so inputs from $10^{-150}$ to $10^{150}$ work.
+  \item \textbf{Normalize and check the geometry.} Divide by the larger radius, so it is exactly 1, and form unit vectors $e_1$, $e_2$ and the plane normal $h = e_1\times e_2$. Exactly antipodal endpoints need a supplied \code{plane\_normal}; coincident or same-ray endpoints return a status. Then form $|\cos(\theta/2)|$, $|\sin(\theta/2)|$, $a$, $b$, $y_0$, $y_\text{end}$ and $y(\pi)$. The dimensional \code{excali\_solve} scales through logarithms first, so inputs from $10^{-150}$ to $10^{150}$ work.
   \item \textbf{Classify and start (zero revolutions).} The parabolic time $t_p = \sqrt{y_0}\,(\sqrt2\,y_0/3 + a)$ decides the conic: $t>t_p$ is an ellipse, $t<t_p$ a hyperbola, and $t=t_p$ to rounding returns the parabola directly. A regime-specific closed-form starter gives $x$ and an admissible bracket $[\text{lo},\text{hi}]$.
   \item \textbf{Decide feasibility ($m>0$).} Reject $t < m\cdot2\pi\,(s/2)^{3/2}$ at once (status 5). Otherwise find the minimum time by Halley from the large-$m$ estimate, stopping as soon as feasibility is decided. Coalesced branches at the minimum return status 1. Each branch starter inverts a cubic Hermite in $\sqrt{1-(t_\text{min}/t)^{1/3}}$, or the local cubic Taylor model within 1\% of $t_\text{min}$.
   \item \textbf{Choose the coordinate.} Use $X=\pm x^2$ near the parabola, $v$ for an ellipse, $\pi-v$ near the upper pole, $w$ for a hyperbola, or $\sqrt{y}$ for the shortest hyperbolas.
@@ -196,19 +196,19 @@ Long-way hyperbolic rearrangement & $b<0$, $w\ge0.3$ & Cancels large asymptotic 
   \item \textbf{Inline polynomial sin/cos:} no faster than the library pair. Apple's \code{\_\_sincos\_stret} gained 1\% and was rejected as nonportable.
   \item \textbf{Lockstep batching across problems:} not attempted. On two-double vectors the cost is a dependency chain within each solve.
 \end{itemize}
-A profile-guided build (\code{-DELAM\_PGO}) adds 3 to 5\%. It is optional and not used in the comparison.
+A profile-guided build (\code{-DEXCALI\_PGO}) adds 3 to 5\%. It is optional and not used in the comparison.
 
 \section{Accuracy and speed}
 
-eLam's maximum error is below ivLam's in 8 of the 10 feasible classes, by up to 160 times (high eccentricity). The other two are at rounding level for both solvers. Its speed relative to ivLam depends on the platform. The benchmark is \code{benchmark\_mixed}: 2,000 cases per class against quad-precision Kepler truth, one thread, \code{-O3 -fno-fast-math}, and zero failures for every solver. Errors are maximum relative endpoint-velocity errors on Apple silicon.
+EXCALI's maximum error is below ivLam's in 8 of the 10 feasible classes, by up to 160 times (high eccentricity). The other two are at rounding level for both solvers. Its speed relative to ivLam depends on the platform. The benchmark is \code{benchmark\_mixed}: 2,000 cases per class against quad-precision Kepler truth, one thread, \code{-O3 -fno-fast-math}, and zero failures for every solver. Errors are maximum relative endpoint-velocity errors on Apple silicon.
 
 \begin{center}
 \small
 \begin{tabular}{l r r r r}
 \toprule
-& \multicolumn{2}{c}{eLam / ivLam time} & \multicolumn{2}{c}{Max error} \\
+& \multicolumn{2}{c}{EXCALI / ivLam time} & \multicolumn{2}{c}{Max error} \\
 \cmidrule(lr){2-3}\cmidrule(lr){4-5}
-Class & Apple M1 Pro & Linux x86-64 & ivLam & eLam \\
+Class & Apple M1 Pro & Linux x86-64 & ivLam & EXCALI \\
 \midrule
 circular\_short  & 0.80 & 1.09 & 3.6e-15 & 2.2e-15 \\
 elliptic\_short  & 0.83 & 1.22 & 1.1e-13 & 4.4e-14 \\
@@ -260,7 +260,7 @@ The multi-revolution starter's minimum-time search is the largest single cost, a
 
 \section{Code breakdown}
 
-\code{src/elam\_solver.f90} is 1,132 lines, 915 of them code. The quadrature kernel and its stage control take about 210 code lines; starters and multi-revolution handling take about 110. Lamberts-Comparison checks this repository out as \code{solvers/elam}, where eLam is solver ID 1 and the two Exact v2.2 originals are IDs 2 and 3.
+\code{src/excali\_solver.f90} is 1,132 lines, 915 of them code. The quadrature kernel and its stage control take about 210 code lines; starters and multi-revolution handling take about 110. Lamberts-Comparison checks this repository out as \code{solvers/excali}, where EXCALI is solver ID 1 and the two Exact v2.2 originals are IDs 2 and 3.
 
 {\small
 \begin{tabularx}{\linewidth}{r r >{\raggedright\arraybackslash}p{3.7cm} >{\raggedright\arraybackslash}X}
@@ -268,8 +268,8 @@ The multi-revolution starter's minimum-time search is the largest single cost, a
 Lines & Code & Part & What it does \\
 \midrule
 1--75 & 46 & Module header & Constants, Gauss--Legendre nodes and weights, trig tables for every $L=2^{-k}$, series coefficients \\
-76--100 & 23 & \code{elam\_solve} & Dimensional entry; scales units through logarithms \\
-101--160 & 53 & \code{elam\_one}: geometry & Input checks, normalization, $a$, $b$, $y_0$, $y_\text{end}$, $y(\pi)$ \\
+76--100 & 23 & \code{excali\_solve} & Dimensional entry; scales units through logarithms \\
+101--160 & 53 & \code{excali\_one}: geometry & Input checks, normalization, $a$, $b$, $y_0$, $y_\text{end}$, $y(\pi)$ \\
 161--227 & 48 & Zero-revolution starters & Ellipse Hermite and pole asymptote; hyperbola Hermite, long-way asymptote, $\sqrt{y}$ start \\
 228--315 & 62 & Multi-revolution & Feasibility bound, Halley minimum time, branch starters \\
 316--323 & 5 & Root dispatch & Stages, then the bracketed contour if they miss \\
