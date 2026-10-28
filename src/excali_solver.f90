@@ -955,8 +955,8 @@ contains
       ! near the parabola (X=+-x**2, a series for |X|<=0.2), or the bracket
       ! [lo,hi] ending at the minimum-time location for m>0. el is 1/16 of it
       ! for 8 nodes (error ~(1/32)**16); the zero-revolution elliptic table
-      ! is within 0.4% of it, so there el is 1/256 of it for 3 nodes
-      ! (error ~(1/512)**6).
+      ! is usually within 0.3% of it, so there el is 1/256 of it for 3 nodes
+      ! (error ~(1/512)**6), and fast_accept rejects the ~1% it misses.
       pure subroutine fast_coordinate(k,x,m,b,wb,lo,hi,kind1,c,el,eight,hs,hc)
          integer,intent(in)::k,m
          real(dp),intent(in)::x,b,wb,lo,hi

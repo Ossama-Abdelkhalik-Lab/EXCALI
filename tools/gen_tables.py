@@ -1,6 +1,6 @@
 """Generate EXCALI's compiled-in starter tables (src/excali_tables.inc).
 
-usage: python3 tools/gen_tables.py [N] [OUT]   (shipped: N=64)
+usage: python3 tools/gen_tables.py [N] [OUT]   (shipped: N=32)
 
 A zero-revolution root depends only on the Lancaster-Blanchard parameter lam
 and on the time relative to the parabolic time tp. All grids are uniform in
@@ -22,6 +22,11 @@ interpolated in mu at run time, |tau| <= TM:
   mr_c(:,k) = cbrt(t_min/m)/sqrt(s_L) and mr_s(:,k) = v* (the minimum-time
   location) on a fine tau grid of MR_NC points;
   mr_v(:,:,k) = branch root v on tau x sigma, sigma = branch*sqrt(1-(t_min/t)**(1/3)).
+The starters only need to be within a few percent of the singularity
+distance, so their grids are coarse. mr_c is not a starter: it decides
+feasibility outside a 1e-6 margin, so it needs MR_NC >= 128 and the m = 5
+slice (worst relative error 1.04e-7 for m = 1..40 and sampled m to 1000,
+including m between slices; 4.4e-7 at m = 5 without that slice).
 
 Truth: bisection on EXCALI's T for the canonical geometry r1 = r2 = 1, with
 the parabolic series where the closed form cancels.
@@ -133,7 +138,7 @@ def hyperbolic(n):
     return out
 
 
-MR_M = [1, 2, 3, 4, 6, 8, 12, 16, 32, 1000000]; MR_NS = 32; MR_NC = 256
+MR_M = [1, 2, 3, 4, 5, 6, 8, 12, 16, 32, 1000000]; MR_NT = 16; MR_NS = 16; MR_NC = 128
 
 
 def tmin_v(lam, m):
@@ -262,9 +267,9 @@ def write(out, n, A, B, HS, HL, HX, V, C, VS):
         arr(f, "mr_v", V); arr(f, "mr_c", C); arr(f, "mr_s", VS)
 
 if __name__ == "__main__":
-    n = int(sys.argv[1]) if len(sys.argv) > 1 else 64
+    n = int(sys.argv[1]) if len(sys.argv) > 1 else 32
     out = sys.argv[2] if len(sys.argv) > 2 else "src/excali_tables.inc"
     A, B = zero_rev(n)
     HS, HL, HX = hyperbolic(n)
-    V, C, VS = multi_rev(32)
+    V, C, VS = multi_rev(MR_NT)
     write(out, n, A, B, HS, HL, HX, V, C, VS)
