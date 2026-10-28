@@ -806,7 +806,7 @@ contains
    enddo
    ! Stage 3: one 8-node rectangle each, then its certificate.
    do j=1,nc
-      if(fast(j).and.k(j)/=0)call rect_ratio(kd(j),c(j),hs(j),hc(j),kr(j),eight(j),g(j)%y0,g(j)%yend,g(j)%a,g(j)%b, &
+      if(fast(j).and.k(j)/=0)call rect_ratio(kd(j),c(j),hs(j),hc(j),kr(j),eight(j),g(j)%y0,merge(wb(j),g(j)%yend,kd(j)==-2),g(j)%a,g(j)%b, &
          g(j)%t,nrev(j),dd(j),de(j),sc(j))
    enddo
    do j=1,nc
@@ -857,7 +857,8 @@ contains
          half=0;status=-1
          g%rn1=sqrt(dot_product(r1,r1));g%rn2=sqrt(dot_product(r2,r2))
          if(.not.(g%rn1>0.and.g%rn2>0).or..not.ieee_is_finite(g%rn1+g%rn2))return
-         dr=dot_product(r1-r2,r1+r2)/(g%rn1+g%rn2)     ! |r1|-|r2| without cancellation
+         dr=g%rn1-g%rn2
+         if(abs(dr)<.5_dp*max(g%rn1,g%rn2))dr=dot_product(r1-r2,r1+r2)/(g%rn1+g%rn2)  ! without cancellation
          ! Correctly rounded unit vectors; the larger normalized radius is exactly 1.
          g%e1=r1/g%rn1;g%e2=r2/g%rn2
          if(g%rn1>=g%rn2)then
@@ -885,8 +886,7 @@ contains
          g%t1v=cross(h,g%e1);g%t2v=cross(h,g%e2)
          g%s1=sqrt(g%rn1);g%s2=sqrt(g%rn2)
          g%p=g%s1*g%s2;g%a=direction*sqrt2*g%p*g%cs;g%b=sqrt2*g%a
-         ! q=s1-s2; from |r1|-|r2| without cancellation when the radii are close.
-         g%q=(g%rn1-g%rn2)/(g%s1+g%s2)
+         g%q=(g%rn1-g%rn2)/(g%s1+g%s2)                  ! q=s1-s2
          if(min(g%rn1,g%rn2)>.5_dp)g%q=(dr/g%scale)/(g%s1+g%s2)
          g%yend=g%q*g%q+2*g%p*g%ss*g%ss/(1+g%cs)
          g%y0=g%yend;if(direction<0)g%y0=g%q*g%q+2*g%p*(1+g%cs)
@@ -908,9 +908,9 @@ contains
          logical,intent(out)::near
          real(dp)::tp,dc,sl,sw
          tp=sqrt(g%y0)*(g%y0*sqrt2/3+g%a)
+         tau=0;u=0;wb=0;k=0;near=.false.
+         if(abs(g%t-tp)<=4*epsilon(tp)*tp)return    ! parabola
          near=abs(g%t-tp)<=.03_dp*tp
-         tau=0;u=0;wb=0;k=0
-         if(abs(g%t-tp)<=4*epsilon(tp)*tp)return
          k=1;u=rcbrt(tp/g%t)
          if(g%t<tp)then
             k=-1;u=g%t/tp
@@ -941,6 +941,9 @@ contains
             if(x>.75_dp*pi)then
                x=pi-x;k=2
             endif
+         elseif(wb>0.and.u<tabh_px)then
+            x=table_xi(tau,u,wb)                ! k=-2: distance from the branch point
+            if(x>0)k=-2
          else
             x=table_w(tau,u,wb)
          endif
@@ -971,6 +974,9 @@ contains
          elseif(k>0)then
             el=min(c,pi-c)/16;eight=.false.  ! k=2: x is already pi-v
             call sincos_half(c,hs,hc)
+         elseif(k==-2)then
+            el=min(c,2*(wb-c),pi)            ! xi: branch point, mirror root, w=+-i*pi
+            call shch(c/2,hs,hc)
          else
             el=min(c,pi)
             if(b>0)el=min(2*c,wb-c)
@@ -1040,6 +1046,13 @@ contains
                else
                   y=g%yend-2*g%b*ch*ch
                endif
+            elseif(k==-2)then
+               ! From xi = wb-w: sinh(w/2), cosh(w/2) and y without cancellation.
+               p=sqrt(g%y0/(2*g%b));c=sqrt(1+p*p)                  ! sinh, cosh of wb/2
+               y=2*g%b*(2*p*c*ch-(1+2*p*p)*sh)*sh
+               dc=p*ch-c*sh;ch=c*ch-p*sh;sh=dc
+               c=1+2*sh*sh;s=-(2*sh*ch)**2;fg=.true.
+               p=sign(1.0_dp,g%a)
             else
                y=g%y0-2*g%b*sh*sh
                ! Short way near the branch point, y cancels; T = sqrt(y)*(y*F+a) = t
@@ -1047,7 +1060,7 @@ contains
                ! dominates, and the half-angle functions follow from it
                ! without cancellation.
                if(g%b>0.and.y<g%y0/4)then
-                  dc=y*fhyp(x,2*sh*ch,c)
+                  call fhyp_d(x,2*sh*ch,c,dc,s);dc=y*dc
                   if(dc<g%a)then
                      y=(g%t/(dc+g%a))**2
                      sh=sqrt((g%y0-y)/(2*g%b));ch=sqrt(1+sh*sh);c=1+2*sh*sh;s=-(2*sh*ch)**2
@@ -1066,8 +1079,9 @@ contains
             ! With q=s1-s2: (r2-r1)/(r1*(s2/s1+1)) = -q/s1, and vt uses s2/s1.
             y=sqrt2/sqrt(y*g%scale)                ! common factor sqrt(2/(y*scale))
             dc=y*dc;p=y*p*g%cs*g%q;s=y*g%ss
-            vr1=dc-p/g%s1;vt1=s*g%s2/g%s1
-            vr2=-(dc+p/g%s2);vt2=s*g%s1/g%s2
+            sh=1/g%s1;ch=1/g%s2
+            vr1=dc-p*sh;vt1=s*g%s2*sh
+            vr2=-(dc+p*ch);vt2=s*g%s1*ch
             v1=vr1*g%e1+vt1*g%t1v
             v2=vr2*g%e2+vt2*g%t2v
          endif
@@ -1088,7 +1102,7 @@ contains
       real(dp),intent(out)::dd,de
       logical,intent(out)::sc
       real(dp),dimension(n1+2)::uu,wq,ct,st,f,f1
-      real(dp)::el,q0,q1,q2,r0,r1,r2,fa,fb,x,sh,ch,sn,cn,rs,yv,y1,ff,ff1,q,g,g1,ser,ser1,pk,y00,ab,mt
+      real(dp)::el,q0,q1,q2,r0,r1,r2,fa,fb,x,sh,ch,sn,cn,rs,yv,y1,ff,ff1,q,g,g1,ser,ser1,pk,y00,ab,mt,sb,cb
       integer::np,j,n
       logical::lw,us
       el=pow2m(kr)
@@ -1141,6 +1155,21 @@ contains
             q=sqrt(yv);g=yv*ff+a
             f(j)=1/(q*g-t)
             f1(j)=-(.5_dp*y1/q*g+q*(y1*ff+yv*ff1))*f(j)**2
+         enddo
+      case(-2)
+         ! xi = wb-w, the distance from the short-way branch point (yend
+         ! carries wb): y = 2b*sinh(wb-xi/2)*sinh(xi/2) keeps full relative
+         ! precision as y -> 0; sinh(w), cosh(w) by angle addition.
+         call shch(yend,sb,cb)
+         do j=1,np
+            x=c+el*uu(j)
+            sh=hs*ct(j)+hc*st(j);ch=hc*ct(j)+hs*st(j)
+            sn=sb*(1+2*sh*sh)-cb*2*sh*ch;cn=cb*(1+2*sh*sh)-sb*2*sh*ch   ! sinh(w), cosh(w)
+            yv=2*b*(sb*ch-cb*sh)*sh;y1=b*sn
+            call fhyp_d(yend-x,sn,cn,ff,ff1)
+            q=sqrt(yv);g=yv*ff+a
+            f(j)=1/(q*g-t)
+            f1(j)=-(.5_dp*y1/q*g+q*(y1*ff-yv*ff1))*f(j)**2
          enddo
       case default
          lw=b<0.and.c>=0.3_dp
@@ -1505,36 +1534,56 @@ contains
       if(.not.(v>0.and.v<pi))v=0
    end function
 
-   ! Zero-revolution hyperbolic root w from the tables at tau and u=t/tp
-   ! (see excali_tables.inc); wb is the short-way branch point. 0 outside.
+   ! Hyperbolic roots from tabh (see excali_tables.inc) at tau and u=t/tp, on
+   ! a grid in sqrt|tau|; wb is the short-way branch point. table_w gives w
+   ! (short way u>=0.1, or long way), table_xi gives xi = wb-w (short way
+   ! u<0.1). 0 outside the tables.
    pure real(dp) function table_w(tau,u,wb) result(w)
       real(dp),intent(in)::tau,u,wb
-      real(dp)::g,p,wt(4),ws(4),r(4)
-      integer::i,j,h
+      real(dp)::v
+      integer::h
       w=0
-      if(.not.(abs(tau)>=tabh_tmin.and.abs(tau)<=tabh_tmax.and.u<=.99_dp))return
       if(tau>0)then
-         h=1;p=u
-         if(.not.(p>=tabh_ps))return
-         g=(p-tabh_ps)*((tab_n-1)/(1-tabh_ps))
+         h=1;v=u
+         if(.not.(v>=tabh_ps.and.u<=.99_dp))return
+         v=(v-tabh_ps)/(1-tabh_ps)
       else
-         h=2;p=rcbrt(u)
-         if(.not.(p>=tabh_pl))return
-         g=(p-tabh_pl)*((tab_n-1)/(1-tabh_pl))
+         h=2;v=rcbrt(u)
+         if(.not.(v>=tabh_pl.and.u<=.99_dp))return
+         v=(v-tabh_pl)/(1-tabh_pl)
       endif
-      j=min(max(int(g)-1,0),tab_n-4);call lagrange4(g-j,ws)
-      g=(abs(tau)-tabh_tmin)*((tab_n-1)/(tabh_tmax-tabh_tmin))
-      if(h==2)g=(tab_n-1)-g
-      i=min(max(int(g)-1,0),tab_n-4);call lagrange4(g-i,wt)
-      r=wt(1)*tabh(i+1,j+1:j+4,h)+wt(2)*tabh(i+2,j+1:j+4,h)+wt(3)*tabh(i+3,j+1:j+4,h)+wt(4)*tabh(i+4,j+1:j+4,h)
-      g=(ws(1)*r(1)+ws(2)*r(2))+(ws(3)*r(3)+ws(4)*r(4))
+      v=tabh_at(tau,v,h)
       if(h==1)then
-         w=sqrt(max(g*(1-u),0._dp))*wb
+         w=sqrt(max(v*(1-u),0._dp))*wb
          if(.not.(w<wb))w=0
       else
-         w=sqrt(max(g*(1-u),0._dp))*(1-rlog(u))
+         w=sqrt(max(v*(1-u),0._dp))*(1-rlog(u))
       endif
       if(.not.(w>0))w=0
+   end function
+
+   pure real(dp) function table_xi(tau,u,wb) result(xi)
+      real(dp),intent(in)::tau,u,wb
+      xi=0
+      if(.not.(tau>0.and.u>0.and.u<tabh_px))return
+      xi=tabh_at(tau,u/tabh_px,3)*wb*u*u
+      if(.not.(xi>0.and.xi<wb))xi=0
+   end function
+
+   ! Slice h of tabh at sqrt|tau| and the second coordinate v in [0,1].
+   pure real(dp) function tabh_at(tau,v,h) result(r)
+      real(dp),intent(in)::tau,v
+      integer,intent(in)::h
+      real(dp)::g,wt(4),ws(4),c(4)
+      integer::i,j
+      r=0
+      g=(sqrt(abs(tau))-tabh_s0)*((tab_n-1)/(tabh_s1-tabh_s0))
+      if(.not.(g>=0.and.g<=tab_n-1))return
+      i=min(max(int(g)-1,0),tab_n-4);call lagrange4(g-i,wt)
+      g=v*(tab_n-1)
+      j=min(max(int(g)-1,0),tab_n-4);call lagrange4(g-j,ws)
+      c=wt(1)*tabh(i+1,j+1:j+4,h)+wt(2)*tabh(i+2,j+1:j+4,h)+wt(3)*tabh(i+3,j+1:j+4,h)+wt(4)*tabh(i+4,j+1:j+4,h)
+      r=(ws(1)*c(1)+ws(2)*c(2))+(ws(3)*c(3)+ws(4)*c(4))
    end function
 
    ! Near the parabola, X = k*x**2 (v**2 for an ellipse, -w**2 for a
@@ -1614,21 +1663,24 @@ contains
       if(v>0.and.v<pi.and.vs>0.and.vs<pi.and.(v-vs)*br>0)stat=1
    end subroutine
 
-   ! Hyperbolic F(w) = (sinh(w)*cosh(w)-w)/(sqrt2*sinh(w)**3) from sinh(w) and
-   ! cosh(w); the parabolic series below w = 0.3, where the closed form cancels.
-   pure real(dp) function fhyp(w,sh,ch) result(f)
+   ! Hyperbolic F(w) = (sinh(w)*cosh(w)-w)/(sqrt2*sinh(w)**3) and dF/dw from
+   ! sinh(w) and cosh(w); the parabolic series below w = 0.3, where the closed
+   ! form cancels.
+   pure subroutine fhyp_d(w,sh,ch,f,f1)
       real(dp),intent(in)::w,sh,ch
+      real(dp),intent(out)::f,f1
       real(dp)::xx
       integer::j
       if(w<.3_dp)then
-         xx=-w*w;f=pser2(1)
+         xx=-w*w;f=pser2(1);f1=0
          do j=2,10
-            f=f*xx+pser2(j)
+            f1=f1*xx+f;f=f*xx+pser2(j)
          enddo
+         f1=-2*w*f1
       else
-         f=(sh*ch-w)*rsqrt2/sh**3
+         f=(sh*ch-w)*rsqrt2/sh**3;f1=(sqrt2-3*ch*f)/sh
       endif
-   end function
+   end subroutine
 
    ! Lagrange velocities v1 = (r2-f*r1)/g, v2 = (gd*r2-r1)/g with f = 1-y/|r1|,
    ! gd = 1-y/|r2|, g = A*sqrt(y), A = d*sqrt(|r1||r2|+r1.r2) (y normalized by

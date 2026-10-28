@@ -10,10 +10,12 @@ Ellipse (t > tp), root v (half the eccentric-anomaly change), s = (tp/t)**(1/3),
 |tau| <= 0.9: tab(:,:,1) = (pi - v)/s for s in [0, 1/2] and tab(:,:,2) =
 v**2/(1 - s) for s in [1/2, 1], smooth through t -> infinity and t -> tp.
 
-Hyperbola (t < tp), root w (half the hyperbolic-anomaly change), u = t/tp:
-short way (0.02 <= tau <= 0.9, u in [0.1, 1]) tabh(:,:,1) = w**2/((1-u)*wb**2)
-with wb the branch point of sqrt(y); long way (-0.9 <= tau <= -0.02,
-u = p**3, p in [0.05, 1]) tabh(:,:,2) = w**2/((1-u)*(1-log(u))**2).
+Hyperbola (t < tp), root w (half the hyperbolic-anomaly change), u = t/tp,
+on sqrt|tau| uniform in [0.02, sqrt(0.9)]: short way (u in [0.1, 1])
+tabh(:,:,1) = w**2/((1-u)*wb**2) with wb the branch point of sqrt(y); long way
+(u = p**3, p in [0.05, 1]) tabh(:,:,2) = w**2/((1-u)*(1-log(u))**2); very short
+short-way hyperbolas (u in [0, 0.1]) tabh(:,:,3) = xi/(wb*u**2) with xi = wb - w
+the distance from the branch point.
 
 Multiple revolutions, slices in mu = 1/m (m in MR_M, the last ~infinity),
 interpolated in mu at run time, |tau| <= TM:
@@ -85,6 +87,18 @@ def branch_w(b, y0):
 
 def root_w(lam, u):
     a, b, y0, yend, tp = geom(lam); t = u * tp
+    if np.all(b > 0) and np.all(u <= PX):          # in xi = wb - w, exact near the branch point
+        wb = branch_w(b, y0); lo = np.zeros_like(lam); hi = wb.copy()
+        for _ in range(100):
+            mid = 0.5 * (lo + hi)
+            w = wb - mid; sh = np.sinh(mid / 2); y = 2 * b * np.sinh(wb - mid / 2) * sh
+            s = np.sinh(w); c = np.cosh(w); X = -w * w; ser = np.zeros_like(w)
+            for p in PSER:
+                ser = ser * X + p
+            F = np.where(w < .3, ser / S2, (s * c - w) / (S2 * np.where(w < .3, 1, s) ** 3))
+            f = np.sqrt(np.maximum(y, 0)) * (y * F + a) < t     # T increases with xi
+            lo = np.where(f, mid, lo); hi = np.where(f, hi, mid)
+        return wb - 0.5 * (lo + hi)
     lo = np.zeros_like(lam); hi = np.where(b > 0, branch_w(b, y0), 80.0)
     for _ in range(90):
         mid = 0.5 * (lo + hi)
@@ -93,16 +107,16 @@ def root_w(lam, u):
     return 0.5 * (lo + hi)
 
 
-TH = (0.02, 0.9); PS = (0.1, 1.0); PL = (0.05, 1.0)
+SH = (0.02, 0.9 ** 0.5); PS = (0.1, 1.0); PL = (0.05, 1.0); PX = 0.1
 
 
 def hyperbolic(n):
+    """Hyperbolic slices on sqrt|tau| uniform in SH (fine toward 180 degrees)."""
+    s = np.linspace(SH[0], SH[1], n)
     out = []
     for side, (p0, p1) in ((1, PS), (-1, PL)):
-        tau = side * np.linspace(TH[0], TH[1], n) if side > 0 else np.linspace(-TH[1], -TH[0], n)
-        lam = 2 * tau / (1 + tau * tau)
-        p = np.linspace(p0, p1, n)
-        L, P = np.meshgrid(lam, p, indexing='ij')
+        tau = side * s * s; lam = 2 * tau / (1 + tau * tau)
+        L, P = np.meshgrid(lam, np.linspace(p0, p1, n), indexing='ij')
         u = np.minimum(P if side > 0 else P ** 3, 1 - 1e-6)
         w = root_w(L, u)
         a, b, y0, yend, tp = geom(L)
@@ -110,6 +124,12 @@ def hyperbolic(n):
             out.append(w * w / ((1 - u) * branch_w(b, y0) ** 2))
         else:
             out.append(w * w / ((1 - u) * (1 - np.log(u)) ** 2))
+    # very short short-way hyperbolas: xi = wb - w on u = PX*p
+    tau = s * s; lam = 2 * tau / (1 + tau * tau)
+    L, P = np.meshgrid(lam, np.linspace(0, 1, n), indexing='ij')
+    u = np.maximum(PX * P, 1e-7)
+    a, b, y0, yend, tp = geom(L); wb = branch_w(b, y0)
+    out.append((wb - root_w(L, u)) / (wb * u * u))
     return out
 
 
@@ -217,7 +237,7 @@ def arr(f, name, M):
         f.write("/\n")
 
 
-def write(out, n, A, B, HS, HL, V, C, VS):
+def write(out, n, A, B, HS, HL, HX, V, C, VS):
     def block(f, name, mats):
         arr(f, name, np.stack(mats, axis=-1))
     with open(out, 'w') as f:
@@ -225,14 +245,15 @@ def write(out, n, A, B, HS, HL, V, C, VS):
         f.write(f"   ! Zero-revolution root tables on tau = lam/(1+sqrt(1-lam**2)).\n")
         f.write(f"   ! Ellipse, |tau| <= {TM}, s = (tp/t)**(1/3): tab(:,:,1) = (pi-v)/s on [0,1/2],\n")
         f.write("   ! tab(:,:,2) = v**2/(1-s) on [1/2,1].\n")
-        f.write(f"   ! Hyperbola, {TH[0]} <= |tau| <= {TH[1]}, u = t/tp: tabh(:,:,1) = w**2/((1-u)*wb**2)\n")
+        f.write(f"   ! Hyperbola, sqrt|tau| in [{SH[0]},{SH[1]:.6f}], u = t/tp: tabh(:,:,1) = w**2/((1-u)*wb**2)\n")
         f.write(f"   ! (short way, u in [{PS[0]},1]); tabh(:,:,2) = w**2/((1-u)*(1-log(u))**2)\n")
-        f.write(f"   ! (long way, u = p**3, p in [{PL[0]},1]).\n")
+        f.write(f"   ! (long way, u = p**3, p in [{PL[0]},1]); tabh(:,:,3) = xi/(wb*u**2), xi = wb-w\n")
+        f.write(f"   ! (short way, u in [0,{PX}]).\n")
         f.write(f"   integer,parameter::tab_n={n}\n   real(dp),parameter::tab_tmax={TM}_dp\n")
         f.write("   integer,private::ti_,tj_\n")
-        f.write(f"   real(dp),parameter::tabh_tmin={TH[0]}_dp,tabh_tmax={TH[1]}_dp,tabh_ps={PS[0]}_dp,tabh_pl={PL[0]}_dp\n")
+        f.write(f"   real(dp),parameter::tabh_s0={SH[0]}_dp,tabh_s1={SH[1]:.17e}_dp,tabh_ps={PS[0]}_dp,tabh_pl={PL[0]}_dp,tabh_px={PX}_dp\n")
         block(f, "tab", (A, B))
-        block(f, "tabh", (HS, HL))
+        block(f, "tabh", (HS, HL, HX))
         f.write(f"   ! Multiple revolutions (slices in mu = 1/m, last ~infinity): mr_v(tau,sigma,k) branch root,\n")
         f.write(f"   ! mr_c(tau,k) = cbrt(t_min/m)/sqrt(s_L), mr_s(tau,k) = v*; |tau| <= {TM}.\n")
         f.write(f"   integer,parameter::mr_nt={V.shape[0]},mr_ns={V.shape[1]},mr_nm={len(MR_M)},mr_nc={MR_NC}\n")
@@ -244,6 +265,6 @@ if __name__ == "__main__":
     n = int(sys.argv[1]) if len(sys.argv) > 1 else 64
     out = sys.argv[2] if len(sys.argv) > 2 else "src/excali_tables.inc"
     A, B = zero_rev(n)
-    HS, HL = hyperbolic(n)
+    HS, HL, HX = hyperbolic(n)
     V, C, VS = multi_rev(32)
-    write(out, n, A, B, HS, HL, V, C, VS)
+    write(out, n, A, B, HS, HL, HX, V, C, VS)
