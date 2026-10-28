@@ -284,3 +284,21 @@ EXCALI is below ivLam at p99 and p99.9 in every class and at the maximum in ever
 Maximum error over the cases both solvers solve (20,000 per class; ivLam fails 4 multi-revolution cases that EXCALI solves): EXCALI / ivLam circular_short 2.4e-15 / 4.2e-15, elliptic_short 4.8e-14 / 4.5e-13, elliptic_long 3.1e-14 / 1.4e-12, high_ecc 2.9e-14 / 2.8e-12, hyperbolic 3.9e-14 / 1.0e-13, near_parabolic 1.5e-15 / 1.6e-15, multirev_1 1.8e-12 / 2.6e-12, multirev_2_3 1.6e-12 / 3.7e-12, multirev_long 9.5e-13 / 1.3e-12, hyperbolic_fast 2.8e-15 / 3.0e-15. All checks pass: standalone 3/3 (OpenMP on and off), Lamberts-Comparison 9/9, MATLAB suites (hard mixed fixture 3,004/3,009), identical statuses to commit 36228ca on 400,000 extreme requests and on the 1M hard mixed dataset.
 
 **Floors set by the double-precision inputs.** Solving a case exactly (quad precision) from its rounded inputs gives the smallest error any double-precision solver can guarantee against the generating orbit. For the multirev_long case that sets EXCALI's maximum (m = 4, 7.7e-11 above the minimum time, which ivLam fails), that floor is 4.0e-12; EXCALI gives 1.75e-11 and confluentcontour 8e-13 (below the floor, by cancellation of rounding errors). ivLam's 1.28e-12 maximum in that class is over the cases it solves, so no solver can beat it there except by chance. For the stress cases near_collinear and near_half_long the floor is 1.6e-9 and 3e-10, above the 1e-10 velocity tolerance; singular_half and singular_coincident have no defined transfer plane. Medians are at the rounding floor for all solvers (exact-solution floors 1.2-1.4e-16; ivLam 2.0-2.7e-16; EXCALI 2.0-4.5e-16); EXCALI's double-double f,g velocities reach about 2.0-2.4e-16 in every class but cost about 13 ns per case if used everywhere, so they are used only near the parabola and the short-way branch point.
+
+## Smaller starter tables — 2026-10-27 (later)
+
+The zero-height rectangle needs a starter only within a few percent of the singularity distance, so the starter grids were made coarser: 32 points per axis for the zero-revolution tables (64 before) and 16 × 16 for the multi-revolution branch roots (32 × 32). `src/excali_tables.inc` shrinks from 9,035 to 2,735 lines. The solver code is unchanged.
+
+The multi-revolution minimum-time table is not a starter: it decides feasibility outside a 1e-6 margin. Measured against bisection truth for m = 1–40 and sampled m up to 1000, the previous 256-point table's worst relative error was 4.4e-7, at m = 5 (interpolated between the m = 4 and m = 6 slices), not "below 1e-7" as recorded earlier; it held below 1e-7 only on the slices. That was still inside the margin. The table now has an m = 5 slice and 128 points, with a worst error of 1.04e-7. With 64 points it exceeds the margin (1.2e-6), and with 16 it gave 108 wrong infeasible statuses on the mixed set.
+
+Coarser options measured (single-thread A/B against the previous tables on the same cases, Apple M1 Pro; an identical build measures 0.999–1.022, so differences under about 2% are noise):
+
+| Tables (zero-rev / branch roots / t_min) | Lines | Mixed set, single / batch | Hard 1M set, single | Statuses |
+|---|---:|---|---|---|
+| 32 / 16 / 128 + m = 5 slice (shipped) | 2,735 | 1.00 / 1.00 | 1.03 | identical |
+| 16 / 16 / 128 | 1,641 | 1.00–1.03 / 1.04 | 1.08–1.12 (hyperbolas 1.19–1.26) | identical |
+| 8 / 8 / 16 | 359 | 1.19 / 1.31 | — | 108 wrong |
+
+8-node rectangles of half-width 1/8 of the bound everywhere, so that a coarser starter still finishes in one rectangle, were not faster. With the shipped tables the one-rectangle path finishes 99.4–100% of each mixed class (20,000 cases each), as before; about 1% of zero-revolution elliptic cases with `v >= 0.3` now miss the 3-node window and take the general path.
+
+**Checks:** identical statuses to the previous tables on the 220,000-case mixed set and the 1,000,009-case hard mixed dataset (scalar and batch), with solutions within 8e-13 of each other; the same 12 hard-set cases fail with both.
