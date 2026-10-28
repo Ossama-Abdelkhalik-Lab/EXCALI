@@ -138,7 +138,7 @@ The safeguard cannot simply be deleted: with it disabled, 0.02 to 0.77\% of each
 \subsection*{Step 10: tables after all, and one rectangle}
 A starter good to a few percent of $R$ makes the rest of the pipeline unnecessary. The zero-revolution root depends only on the Lancaster--Blanchard parameter $\lambda$ and on $t/t_p$, so EXCALI now compiles in tables of the root, as v2.2 did, but over $\tau=\lambda/(1+\sqrt{1-\lambda^2})$ and in forms that stay smooth at both ends: $(\pi-v)/s$ and $v^2/(1-s)$ in $s=(t_p/t)^{1/3}$ for ellipses, and $w^2/((1-u)w_b^2)$ or $w^2/((1-u)(1-\log u)^2)$ in $u=t/t_p$ for short- and long-way hyperbolas. For multiple revolutions the tables hold the branch root over $\tau$ and $\sigma=\pm\sqrt{1-(t_\text{min}/t)^{1/3}}$, and $t_\text{min}$ and its location $v^\ast$, in slices of $1/m$; feasibility then needs no search. Near the parabola, outside the tables, a second-order reversion of the series $T(X)$ gives the root. The generator is \code{tools/gen\_tables.py}; interpolation is $4\times4$ cubic.
 
-Each such starter is within a few percent of a lower bound on $R$ that costs almost nothing: $\min(v,\pi-v)$ in the elliptic coordinates, $\min(w,\pi)$ or $\min(2w,w_b-w)$ for hyperbolas, $|X|$ near the parabola, and the distance to $v^\ast$ for multiple revolutions. One 8-node rectangle with $L$ at most 1/16 of that bound is therefore final, with error about $(1/32)^{16}$. It is still certified as before (a sign change of $T-t$, the estimate inside, $d_e$ at rounding), and this holds for 99.4 to 100\% of the cases the starters cover. The rest, very short hyperbolas, and multi-revolution times within $10^{-6}$ of $t_\text{min}$ use the pipeline of Steps~6 to~9.
+Each such starter is within a few percent of a lower bound on $R$ that costs almost nothing: $\min(v,\pi-v)$ in the elliptic coordinates, $\min(w,\pi)$ or $\min(2w,w_b-w)$ for hyperbolas, $|X|$ near the parabola, and the distance to $v^\ast$ for multiple revolutions. One 8-node rectangle with $L$ at most 1/16 of that bound is therefore final, with error about $(1/32)^{16}$; the zero-revolution elliptic table is within 0.4\% of its bound, so there a 3-node rectangle with $L$ at most 1/256 of it suffices (error about $(1/512)^6$). It is still certified as before (a sign change of $T-t$, the estimate inside, $d_e$ at rounding), and this holds for 99.4 to 100\% of the cases the starters cover. The rest, very short hyperbolas, and multi-revolution times within $10^{-6}$ of $t_\text{min}$ use the pipeline of Steps~6 to~9. Velocities near the parabola and near the short-way branch point use Lagrange $f,g$ from the exact inputs in double-double arithmetic, with $y$ taken from the time equation where $y_0-2b\sinh^2(w/2)$ cancels; elsewhere the radial/transverse form.
 
 \section{The algorithm step by step}
 
@@ -205,7 +205,7 @@ A profile-guided build (\code{-DEXCALI\_PGO}) adds 3 to 5\%. It is optional and 
 
 \section{Accuracy and speed}
 
-\paragraph{With the tables (2026-10-27).} Same benchmark, Apple M1 Pro, under background load (ratios reliable, absolute times to about $\pm5\%$). Single solves take 0.47 to 0.83 times ivLam's time (0.74 overall; ConfluentContour 0.92). By class: circular 0.75, elliptic short 0.77, elliptic long 0.82, high eccentricity 0.80, hyperbolic 0.83, near parabolic 0.76, multiple revolutions 0.65 to 0.70, infeasible 0.47, fast hyperbolas 0.78. On the classes it solves, Exact v2.2's serial kernel takes 213 to 227\,ns per call against EXCALI's 150 to 153. The batch entry takes 90 to 137\,ns per case, 101 overall. On the comparison's 1,000,000-case elliptic dataset, \code{excali\_batch} takes 118\,ns per case against 120 for Exact v2.2's vector batch and 133 for its serial batch. Errors at the 99th and 99.9th percentiles match or beat ConfluentContour's in every class and beat ivLam's except in the near-parabolic and fast-hyperbola classes; \code{docs/VALIDATION.md} has the tables. The rest of this section is the 2026-10-23 state before the tables.
+\paragraph{With the tables (2026-10-27).} Same benchmark, Apple M1 Pro, under background load (ratios reliable, absolute times to about $\pm5\%$). Single solves took 0.47 to 0.83 times ivLam's time (0.74 overall; ConfluentContour 0.92) before the double-double velocities and the single code path; now 0.88 overall (see \code{docs/VALIDATION.md}). By class: circular 0.75, elliptic short 0.77, elliptic long 0.82, high eccentricity 0.80, hyperbolic 0.83, near parabolic 0.76, multiple revolutions 0.65 to 0.70, infeasible 0.47, fast hyperbolas 0.78. On the classes it solves, Exact v2.2's serial kernel takes 213 to 227\,ns per call against EXCALI's 150 to 153. The batch entry takes 90 to 137\,ns per case, 101 overall. On the comparison's 1,000,000-case elliptic dataset, \code{excali\_batch} takes 118\,ns per case against 120 for Exact v2.2's vector batch and 133 for its serial batch. Errors at the 99th and 99.9th percentiles match or beat ConfluentContour's in every class and beat ivLam's except in the near-parabolic and fast-hyperbola classes; \code{docs/VALIDATION.md} has the tables. The rest of this section is the 2026-10-23 state before the tables.
 
 EXCALI's maximum error is below ivLam's in 8 of the 10 feasible classes, by up to 160 times (high eccentricity). The other two are at rounding level for both solvers. Its speed relative to ivLam depends on the platform. The benchmark is \code{benchmark\_mixed}: 2,000 cases per class against quad-precision Kepler truth, one thread, \code{-O3 -fno-fast-math}, and zero failures for every solver. Errors are maximum relative endpoint-velocity errors on Apple silicon.
 
@@ -267,33 +267,24 @@ The multi-revolution starter's minimum-time search was the largest single cost, 
 
 \section{Code breakdown}
 
-\code{src/excali\_solver.f90} is 1,690 lines, 1,392 of them code, and includes the generated tables \code{src/excali\_tables.inc}. Lamberts-Comparison checks this repository out as \code{solvers/excali}, where EXCALI is solver ID 1 and the two Exact v2.2 originals are IDs 2 and 3.
+\code{src/excali\_solver.f90} is 1,721 lines, 1,384 of them code, and includes the generated tables \code{src/excali\_tables.inc}. Every step exists once: \code{excali\_one} is \code{solve\_chunk} with one case, so single solves and the batch entry share all code. Lamberts-Comparison checks this repository out as \code{solvers/excali}, where EXCALI is solver ID 1 and the two Exact v2.2 originals are IDs 2 and 3.
 
 {\small
 \begin{tabularx}{\linewidth}{r r >{\raggedright\arraybackslash}p{3.7cm} >{\raggedright\arraybackslash}X}
 \toprule
 Lines & Code & Part & What it does \\
 \midrule
-1--78 & 48 & Module header & Constants, Gauss--Legendre nodes and weights, trig tables for every $L=2^{-k}$, series coefficients, the starter tables \\
-79--103 & 23 & \code{excali\_solve} & Dimensional entry; scales units through logarithms \\
-104--163 & 53 & \code{excali\_one}: geometry & Input checks, normalization, $a$, $b$, $y_0$, $y_\text{end}$, $y(\pi)$ \\
-164--265 & 79 & Zero-revolution starters & Tables, near-parabolic series reversion, and the closed-form starters outside them \\
-266--292 & 18 & Multi-revolution & Feasibility bound, table feasibility and branch root \\
-293--314 & 13 & Root dispatch & One rectangle from a table starter; otherwise stages, then the bracketed contour \\
-315--380 & 44 & Velocities & Radial and transverse components \\
-381--469 & 67 & \code{mrev\_start}, \code{pole\_coordinate} & Halley minimum time and branch starters near $t_\text{min}$ \\
-470--523 & 45 & \code{hyper\_table}, \code{fast\_root} & The one-rectangle path and its width bounds \\
-524--647 & 101 & \code{contour\_root}, \code{rect\_root} & Stage 1 and stage 2 control: re-centre, widen, accept \\
-648--725 & 62 & \code{canonical}, \code{reach} & Coordinate choice and the analytic singularity distance $R$ \\
-726--804 & 68 & \code{converge\_y}, \code{ytime} & Bracketed contour in $\sqrt{y}$ for very short hyperbolas \\
-805--911 & 88 & \code{converge} & Bracketed contour for starter misses \\
-912--1134 & 200 & \code{excali\_batch} & Batch entry: the one-rectangle path in stages over blocks of 32 \\
-1135--1256 & 111 & \code{rect\_ratio} & The zero-height rectangle: fused node loop, $\Q_0$, $\Q_1$, $\Q_2$, $d_d$, $d_e$, sign test \\
-1257--1289 & 30 & \code{rotate} & Half-angle functions carried by angle addition \\
-1290--1383 & 86 & \code{f\_derivs}, \code{time\_derivs} & $T$ and its derivatives in each coordinate \\
-1384--1534 & 121 & Helpers & \code{shch}, \code{sincos\_half}, \code{pow2m}, \code{kexp}, \code{rasinh}, \code{qlog}, \code{rasin}, \code{rlog}, \code{rcbrt}, \code{xof} \\
-1535--1678 & 125 & Table lookups & \code{table\_v}, \code{table\_w}, \code{near\_parabola\_x}, \code{mrev\_table}, \code{lagrange4} \\
-1679--1690 & 10 & Helpers & \code{hermite}, \code{cross} \\
+1--82 & 51 & Module header & Constants, Gauss--Legendre nodes and weights, trig tables for every $L=2^{-k}$, series coefficients, the starter tables and the \code{frame} type \\
+83--128 & 38 & \code{excali\_solve}, \code{excali\_one} & Dimensional entry (units through logarithms); one case through \code{solve\_chunk} \\
+129--234 & 73 & \code{general\_root} & Table-free path: closed-form starters, multi-revolution feasibility bound \\
+235--729 & 386 & Its contained procedures & Halley minimum time, stage 1 and 2 control, coordinate choice, singularity distance $R$, bracketed contours in $\sqrt{y}$ and in the anomaly \\
+730--849 & 93 & \code{excali\_batch}, \code{solve\_chunk} & Blocks of up to 32 cases, stage by stage: geometry, tables, one rectangle, general path, velocities \\
+850--1083 & 192 & Stage steps & \code{geometry}, \code{table\_coordinates}, \code{table\_root}, \code{fast\_coordinate}, \code{fast\_accept}, \code{velocities} (internal, inlined) \\
+1084--1205 & 111 & \code{rect\_ratio} & The zero-height rectangle: fused node loop, $\Q_0$, $\Q_1$, $\Q_2$, $d_d$, $d_e$, sign test \\
+1206--1332 & 116 & \code{rotate}, \code{f\_derivs}, \code{time\_derivs} & Half-angle functions by angle addition; $T$ and its derivatives in each coordinate \\
+1333--1483 & 121 & Helpers & \code{shch}, \code{sincos\_half}, \code{pow2m}, \code{kexp}, \code{rasinh}, \code{qlog}, \code{rasin}, \code{rlog}, \code{rcbrt}, \code{xof} \\
+1484--1618 & 117 & Table lookups & \code{table\_v}, \code{table\_w}, \code{near\_parabola\_x}, \code{mrev\_table} \\
+1619--1722 & 86 & Velocity accuracy, helpers & \code{fhyp}, \code{fg\_velocities} (double-double Lagrange $f,g$), \code{lagrange4}, \code{hermite}, \code{cross} \\
 \bottomrule
 \end{tabularx}
 }

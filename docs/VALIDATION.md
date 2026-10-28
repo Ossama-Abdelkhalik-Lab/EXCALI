@@ -252,3 +252,29 @@ ivLam fails 4 of the 60,000 multi-revolution cases; EXCALI and confluentcontour 
 **Hard stress cases.** Of the nine appended stress cases, `circular`, `high_eccentricity`, `near_parabolic` and `near_half_short` pass. The exact solution of the rounded double inputs, computed in quad precision, already misses the generating orbit by 1.6e-9 for `near_collinear` and 3e-10 for `near_half_long` (transfer angle within 1e-7 of 0 or pi: the orbit plane is known only to about 1e-9 from `r1 x r2`); `near_full_orbit` is similarly conditioned. `singular_half` and `singular_coincident` have no defined transfer plane. These five cannot meet the 1e-10 velocity tolerance from double inputs.
 
 **Remaining iteration and fallbacks.** Very short hyperbolas (`t < 0.1 t_p`, 40% of the hard dataset's hyperbolas) still use the bracketed contour in `sqrt(y)` (1.2 rectangles per solve on average); multi-revolution times within 1e-6 of `t_min` still use the Halley search; and the general path still handles the 0–0.6% of covered cases whose single rectangle is rejected. Single solves of strong hyperbolas (`hyperbolic_fast`) are about 5% slower than before, because the table lookup costs more than the closed-form starter that already served them well; the batch entry is 27% faster there.
+
+## Accuracy at the rounding floor, one code path — 2026-10-27 (later)
+
+- **Velocities:** near the parabola and near the short-way branch point (both with cos(theta/2) > 0.3), Lagrange f,g on the exact inputs in double-double arithmetic (FMA products, compensated sums), correctly rounded for the computed `y`. On short-way hyperbolas near the branch point, `y` comes from the time equation, `sqrt(y) = t/(y*F + a)`, which damps the cancellation in `y0 - 2b*sinh(w/2)**2` (only where `a` dominates `y*F`; near 180 degrees it does not), and the half-angle functions follow from `y`. When the radii are within a factor 2, `|r1|-|r2|` comes from `(r1-r2).(r1+r2)/(|r1|+|r2|)`.
+- **One code path:** `excali_one` is one case of the batch stages (`solve_chunk`), so geometry, table starters, the one-rectangle path and velocities each exist once; the general path is `general_root`. The zero-revolution elliptic table is accurate enough for a 3-node rectangle (half-width 1/256 of the bound).
+
+Accuracy on 20,000 cases per class against quad-precision truth (relative endpoint velocity error, p99 / p99.9 / max):
+
+| Class | EXCALI | confluentcontour | ivLam |
+|---|---|---|---|
+| circular_short | 1.2e-15 / 1.7e-15 / 2.4e-15 | 1.0e-15 / 1.4e-15 / 1.9e-15 | 2.0e-15 / 3.1e-15 / 4.2e-15 |
+| elliptic_short | 2.1e-15 / 7.0e-15 / 4.8e-14 | 2.4e-15 / 8.2e-15 / 4.8e-14 | 8.1e-15 / 6.0e-14 / 4.5e-13 |
+| elliptic_long | 1.8e-15 / 4.7e-15 / 3.1e-14 | 2.2e-15 / 5.5e-15 / 3.1e-14 | 5.1e-14 / 2.6e-13 / 1.4e-12 |
+| high_ecc | 4.8e-15 / 8.4e-15 / 2.9e-14 | 5.1e-15 / 9.8e-15 / 2.9e-14 | 7.5e-14 / 6.8e-13 / 2.8e-12 |
+| hyperbolic | 1.2e-15 / 5.0e-15 / 3.9e-14 | 1.6e-15 / 3.8e-15 / 4.4e-14 | 4.5e-15 / 2.1e-14 / 1.0e-13 |
+| near_parabolic | 6.8e-16 / 9.8e-16 / 1.5e-15 | 1.2e-15 / 2.0e-15 / 2.9e-15 | 7.9e-16 / 1.1e-15 / 1.6e-15 |
+| multirev_1 | 1.9e-14 / 1.8e-13 / 1.8e-12 | 2.0e-14 / 1.6e-13 / 3.1e-12 | 7.2e-14 / 3.5e-13 / 2.6e-12 (1 fail) |
+| multirev_2_3 | 2.0e-14 / 1.7e-13 / 1.6e-12 | 2.1e-14 / 2.2e-13 / 1.2e-12 | 6.8e-14 / 3.5e-13 / 3.7e-12 (1 fail) |
+| multirev_long | 1.9e-14 / 1.6e-13 / 1.8e-11 | 2.0e-14 / 1.9e-13 / 2.2e-12 | 7.2e-14 / 3.1e-13 / 1.3e-12 (2 fail) |
+| hyperbolic_fast | 1.0e-15 / 1.7e-15 / 2.8e-15 | 4.7e-15 / 7.5e-15 / 1.4e-14 | 1.2e-15 / 1.9e-15 / 3.0e-15 |
+
+EXCALI is below ivLam at p99 and p99.9 in every class and at the maximum in every class except multirev_long (one case 7.7e-11 above the minimum time, where ivLam fails two cases). Medians are at the rounding floor for all three (2-5e-16; ivLam's is lower by up to 1.3e-16 in five classes). The quad-precision exact solution of the rounded inputs, rounded to double, sets the floor at about 6e-16 (p99) for near_parabolic and 9e-16 for hyperbolic_fast.
+
+**Speed (batch routines, one thread, interleaved, Apple M1 Pro under background load):** on the 1,000,000-case zero-revolution elliptic dataset EXCALI 114 ns per case, Exact v2.2 vector 120, serial 133 (EXCALI 0 failures, Exact 3). On the zero-revolution ellipses of the hard mixed dataset (the cases Exact attempts, 66,667): EXCALI 115 ns, Exact vector 116, serial 131 (failures 2 versus 34). Over the whole hard dataset Exact's batches average 143-165 ns against EXCALI's 195 only because they reject 737,000 of the 1,000,009 cases; EXCALI solves all but 7. Single solves through `excali_one` cost about 8% more than before the code paths were merged (the price of one code path); they remain 0.88 times ivLam's time overall in `benchmark_mixed` (0.73-0.92 per class, except 1.02 for hyperbolic and 1.07 for hyperbolic_fast, where the double-double velocities add their cost).
+
+**Stress:** 400,000 extreme random requests give identical statuses to the implementation at the start of the day (commit 36228ca). The 1,172 solutions that differ by more than 1e-11 are all within 1e-4 rad of a 180-degree transfer, where independent propagation shows neither version consistently closer (both miss by about 1e-9).
