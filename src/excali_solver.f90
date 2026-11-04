@@ -1,10 +1,9 @@
-! EXCALI (EXact Cauchy-Analytic Lambert Integration): finite rectangular-contour Lambert root extraction across conics.
-! Extended from Exact v2.2's thin-rectangle ratio. The root comes from the
-! zero-height limit of that rectangle (real Gauss-Legendre quadrature of
-! 1/(T-t) and its derivative), applied in one or two fixed stages without a
-! Newton polish. Geometry, half-anomaly time functions, derivatives and
-! closed-form starters are adapted from ConfluentContour's former contour_simple. No
-! confluent/Householder root steps and no calls to another Lambert solver.
+! EXCALI (EXact Cauchy-Analytic Lambert Integration): Lambert's problem for
+! every conic and revolution count from the zero-height limit of Exact v2.2's
+! thin-rectangle ratio, root = c + Q[((x-c)f)']/Q[f'], f = 1/(T-t), by real
+! Gauss-Legendre quadrature: a table starter and one fixed rectangle, or, off
+! the tables, one fixed ratio over a region chosen from the geometry.
+! Geometry and time functions adapted from ConfluentContour's contour_simple.
 module excali_solver
    use iso_fortran_env, only: real64, int64
    use ieee_arithmetic, only: ieee_is_finite, ieee_value, ieee_quiet_nan, ieee_fma
@@ -35,9 +34,9 @@ module excali_solver
    real(dp),parameter :: g3x(3)=[0._dp,.7745966692414834_dp,1._dp],g3w(2)=[8._dp/9,5._dp/9]
    ! Full node lists (nodes, then the endpoints +1,-1) with their weights,
    ! and cos/sin (cosh/sinh) of the half offsets L*u/2 for each L=2**(-k).
-   ! The tables are initialized read-only module data, not parameters:
-   ! some gfortran versions copy a whole parameter array to the stack when
-   ! it is indexed at run time.
+   ! They are protected module data, initialized at compile time: indexing a
+   ! parameter array at run time makes some gfortran versions copy it to the
+   ! stack.
    real(dp),parameter :: u8(n1+2)=[g8x(1:h1),-g8x(1:h1),1._dp,-1._dp],w8(n1+2)=[g8w,g8w,0._dp,0._dp]
    real(dp),parameter :: u3(5)=[0._dp,g3x(2),-g3x(2),1._dp,-1._dp],w3(5)=[g3w(1),g3w(2),g3w(2),0._dp,0._dp]
    real(dp),protected :: c8f(n1+2,0:kmax)=reshape([((cos(.5_dp**(k_+1)*u8(j_)),j_=1,n1+2),k_=0,kmax)],[n1+2,kmax+1])
@@ -48,11 +47,10 @@ module excali_solver
    real(dp),protected :: s3f(5,0:kmax)=reshape([((sin(.5_dp**(k_+1)*u3(j_)),j_=1,5),k_=0,kmax)],[5,kmax+1])
    real(dp),protected :: ch3f(5,0:kmax)=reshape([((cosh(.5_dp**(k_+1)*u3(j_)),j_=1,5),k_=0,kmax)],[5,kmax+1])
    real(dp),protected :: sh3f(5,0:kmax)=reshape([((sinh(.5_dp**(k_+1)*u3(j_)),j_=1,5),k_=0,kmax)],[5,kmax+1])
-   ! Reciprocal factorials 1/j! (constant multiplies, not divisions).
+   ! Reciprocal factorials 1/j!, so the Taylor series multiply by constants.
    real(dp),parameter :: rf(16)=[(1/gamma(j_+1._dp),j_=1,16)]
-   ! Fixed 32-point Gauss-Legendre rule on the whole multi-revolution domain
-   ! v in [0,pi] (no starter): nodes gv, weights gw times the half-width pi/2,
-   ! and sin/cos of gv/2. Positive half of the standard nodes on [-1,1].
+   ! 32-point Gauss-Legendre rule (positive nodes and weights on [-1,1]) for the
+   ! multi-revolution minimum, and on v in [0,pi]: gv, gw*pi/2, sin/cos(gv/2).
    integer,parameter  :: ng=32,hg=ng/2
    real(dp),parameter :: ggx(hg)=[0.04830766568773832_dp,0.1444719615827965_dp,0.23928736225213706_dp, &
       0.33186860228212767_dp,0.42135127613063533_dp,0.5068999089322294_dp,0.5877157572407623_dp, &
@@ -62,6 +60,14 @@ module excali_solver
       0.09117387869576371_dp,0.08765209300440369_dp,0.08331192422694662_dp,0.07819389578707012_dp, &
       0.0723457941088482_dp,0.0658222227763616_dp,0.05868409347853546_dp,0.05099805926237596_dp, &
       0.042835898022226926_dp,0.03427386291302163_dp,0.02539206530926273_dp,0.016274394730906486_dp,0.007018610009470362_dp]
+   ! 24-point rule for the region formulas (ratio_root).
+   integer,parameter  :: nz=24,hz=nz/2
+   real(dp),parameter :: gzx(hz)=[0.06405689286260563_dp,0.1911188674736163_dp,0.3150426796961634_dp, &
+      0.4337935076260451_dp,0.5454214713888396_dp,0.6480936519369755_dp,0.7401241915785544_dp,0.820001985973903_dp, &
+      0.8864155270044011_dp,0.9382745520027328_dp,0.9747285559713095_dp,0.9951872199970213_dp]
+   real(dp),parameter :: gzw(hz)=[0.1279381953467523_dp,0.1258374563468285_dp,0.12167047292780352_dp, &
+      0.11550566805372571_dp,0.10744427011596573_dp,0.09761865210411409_dp,0.08619016153195343_dp, &
+      0.07334648141108027_dp,0.059298584915436534_dp,0.04427743881741942_dp,0.028531388628933684_dp,0.012341229799986784_dp]
    real(dp),parameter :: gvp(ng)=[(pi/2*(1+ggx(j_)),j_=1,hg),(pi/2*(1-ggx(j_)),j_=1,hg)]
    real(dp),protected :: gv(ng)=gvp,gw(ng)=[ggw*(pi/2),ggw*(pi/2)]
    real(dp),protected :: gsv(ng)=sin(gvp/2),gcv(ng)=cos(gvp/2)
@@ -135,12 +141,11 @@ contains
    v1=w1(:,1);v2=w2(:,1);status=st(1);half=hf(1)
    end subroutine excali_one
 
-   ! General path (no tables, or a table rectangle not certified): every case
-   ! goes to exactly one fixed 32-node zero-height ratio, chosen by region,
-   ! with no starter, retry or iteration (Lamberts-Comparison research/
-   ! closed-form). Returns the root in coordinate k with its half-angle
-   ! functions (or Y=sqrt(y) in yy). status 0/1 on success, 5 below the
-   ! minimum time, -4 when a certificate fails.
+   ! Region formulas for cases off the tables (and hyperbolic or multi-revolution
+   ! rectangles that fail their certificate): one fixed ratio over a region
+   ! chosen from the geometry, in a coordinate free of singularities near the
+   ! root. Returns the root in coordinate k with its half-angle functions (or
+   ! Y=sqrt(y) in yy); status 0/1 solved, 5 below the minimum time, -4 failed.
    subroutine general_root(g,m,br,k,x,hs,hc,trig,yy,status)
    type(frame),intent(in) :: g
    integer,intent(in)     :: m,br
@@ -161,7 +166,7 @@ contains
    endif
    ! Multiple revolutions. Every ellipse through both points has a>=s/2,
    ! so T > m*2*pi*(s/2)**1.5 (within 31% of the minimum time) rejects
-   ! most infeasible times without evaluating T.
+   ! most infeasible times from the geometry alone.
    status=5
    dc=sqrt((rn1-rn2)**2+4*rn1*rn2*ss*ss);c=(rn1+rn2+dc)/2     ! chord, semiperimeter
    if(t<m*pi*c*sqrt(c)/sqrt2*(1-1e-12_dp))return
@@ -177,17 +182,18 @@ contains
 
    contains
 
-      ! Multiple revolutions with no starter, table or iteration: two fixed
-      ! 32-node zero-height ratios over the whole interval [0,pi].
-      ! 1. v* is the only zero of D=T'*sin(v)**4 on (0,pi); D has no pole and
+      ! Multiple revolutions from two fixed 32-node zero-height ratios over the
+      ! whole interval [0,pi] (or the scaled interval below).
+      ! 1. v* is the only zero of D=T'*sin(v)**4 on (0,pi); D is pole-free with
       !    D(0)=-3m*pi*y0**1.5/sqrt2, D(pi)=3(m+1)*pi*ypi**1.5/sqrt2. Then
       !    tmin=T(v*) is exact to rounding (T'(v*)=0) and decides feasibility.
       ! 2. rho=sign(v-v*)*sqrt(1-(tmin/T)**(1/3)) rises from -1 to 1 through the
       !    fold and both poles; branch br is its level set
       !    rho=br*sqrt(1-(tmin/t)**(1/3)). T-tmin comes from sum-to-product
       !    differences about v*, so rho keeps full precision near v*.
-      ! Each ratio is certified by its second moment; false hands the case to
-      ! the starter path (status unchanged).
+      ! Each ratio is certified by its second moment. Result: 0 when done
+      ! (status set), 1 when v* and tmin are known and the branch is outside
+      ! the scaled interval (branch_fixed), 2 when the v* certificate fails.
       integer function mrev_global() result(r)
          real(dp)::tv(ng),t1(ng),ff(ng),fp(ng),xn(ng),wn(ng),sxn(ng),cxn(ng),dd(0:3),s,co,dv,dvp,fa,fb, &
                    vs,err,hss,hcs,ss3,fs,ys,qs,sd,cd,sm,cm,dyv,dsv,dphi,ds3,dfv,yv,qv,dtv,u,ut,rt,rt2, &
@@ -241,7 +247,7 @@ contains
             s=2*hss*hcs;fb=1/(dd(1)*s**4)
             if(.not.(fa<0.and.fb>0))return
          endif
-         call global_ratio(ff,fp,fa,fb,lo2,hi2,xn,wn,(lo2+hi2)/2,vs,err)
+         call global_ratio(ng,ff,fp,fa,fb,lo2,hi2,xn,wn,(lo2+hi2)/2,vs,err)
          if(.not.(vs>lo2.and.vs<hi2.and.err<=1e-13_dp*(hi2-lo2)))return
          call sincos_half(vs,hss,hcs)
          call time_derivs(vs,1,m,y0,yend,a,b,dd,hss,hcs)
@@ -252,13 +258,13 @@ contains
             status=1;k=1;x=vs;hs=hss;hc=hcs;trig=.true.;return
          endif
          status=-4
-         ! From here a failure keeps v* and tmin and goes to the branch starter.
+         ! From here a failure keeps v* and tmin for branch_fixed.
          r=1;x=vs;d=dd;hs=hss;hc=hcs
          lo=lo2;hi=hi2
          if(whole)then
             lo=vs;hi=vs
          endif
-         ! Branch target, 1-(tmin/t)**(1/3) without cancellation.
+         ! Branch target, 1-(tmin/t)**(1/3) in cancellation-free form.
          pt=tmin/t;ut=cbrt_c(pt);rt2=(1-pt)/(1+ut+ut*ut);rt=br*sqrt(rt2)
          ! Values at v*: sin, F, y, sqrt(y).
          s=2*hss*hcs;ss3=s**3
@@ -318,15 +324,15 @@ contains
             if(.not.(rr(ng+1)<rt.and.rt<rr(ng+2)))return  ! root outside: starter path
             fa=ff2(ng+1);fb=ff2(ng+2)
          endif
-         call global_ratio(ff2,fp2,fa,fb,lo2,hi2,xn,wn,(lo2+hi2)/2,vs,err)
+         call global_ratio(ng,ff2,fp2,fa,fb,lo2,hi2,xn,wn,(lo2+hi2)/2,vs,err)
          if(.not.(err<=1e-13_dp*(hi2-lo2).and.(vs-x)*br>0.and.vs>lo2.and.vs<hi2))return
          ! Near either pole recentre the moment there, so the small distance
          ! keeps its relative precision.
          k=1
          if(vs<.25_dp)then
-            call global_ratio(ff2,fp2,fa,fb,lo2,hi2,xn,wn,0._dp,vs,err)
+            call global_ratio(ng,ff2,fp2,fa,fb,lo2,hi2,xn,wn,0._dp,vs,err)
          elseif(vs>pi-.25_dp)then
-            call global_ratio(ff2,fp2,fa,fb,lo2,hi2,xn,wn,pi,vs,err)
+            call global_ratio(ng,ff2,fp2,fa,fb,lo2,hi2,xn,wn,pi,vs,err)
             vs=pi-vs;k=2
          endif
          if(.not.(vs>0))then
@@ -396,8 +402,8 @@ contains
          if(b>0)xa=max(xa,-2*asinh(sqrt(y0/(2*b)))**2)
       end function
 
-      ! Multi-revolution branch outside the minimum's interval [lo,hi] (or
-      ! lo=hi=v* when that ratio did not certify): sigma=(tmin/T)**(1/3) from
+      ! Multi-revolution branch outside the minimum's interval [lo,hi] (lo=hi=v*
+      ! after the whole-interval ratio): sigma=(tmin/T)**(1/3) from
       ! the pole to the interval, in zeta about the pole when the sqrt(y)
       ! branch points crowd it (kinds 4, 3), else in v or d (kinds 5, 2).
       logical function branch_fixed() result(ok)
@@ -420,7 +426,7 @@ contains
          ok=ratio_root(kz,lo2,hi2)
       end function
 
-      ! One fixed 32-node ratio in coordinate kz on [l0,h0], certified by
+      ! One fixed 24-node ratio in coordinate kz on [l0,h0], certified by
       ! the signs at the ends and the second moment; sets k, x, hs, hc (or yy).
       ! In zeta the singularities lie at height pi/2 while the interval grows
       ! like log(1/s0), so it is cut into equal pieces of length <= 4 and the
@@ -428,7 +434,7 @@ contains
       logical function ratio_root(kz,l0,h0) result(ok)
          integer,intent(in)::kz
          real(dp),intent(in)::l0,h0
-         real(dp)::zn(ng),wn(ng),ff(ng),fp(ng),fa,fb,z,err,tz,dz,cen,hl,lo2,hi2
+         real(dp)::zn(nz),wn(nz),ff(nz),fp(nz),fa,fb,z,err,tz,dz,cen,hl,lo2,hi2
          integer::j,np
          ok=.false.
          lo2=l0;hi2=h0;np=1
@@ -443,16 +449,16 @@ contains
          enddo
          cen=(lo2+hi2)/2;hl=(hi2-lo2)/2
          if(.not.(hl>0))return
-         zn=[cen+hl*ggx,cen-hl*ggx];wn=[ggw*hl,ggw*hl]
-         do j=1,ng
+         zn=[cen+hl*gzx,cen-hl*gzx];wn=[gzw*hl,gzw*hl]
+         do j=1,nz
             call zeval(kz,zn(j),ff(j),fp(j),tz)
          enddo
          call zeval(kz,lo2,fa,dz,tz);call zeval(kz,hi2,fb,dz,tz)
          if(.not.(fa<0.and.fb>0))return
-         call global_ratio(ff,fp,fa,fb,lo2,hi2,zn,wn,cen,z,err)
+         call global_ratio(nz,ff,fp,fa,fb,lo2,hi2,zn,wn,cen,z,err)
          ! A root near the lower end keeps its relative precision with the
          ! moment taken about that end.
-         if(z-lo2<.25_dp*(hi2-lo2))call global_ratio(ff,fp,fa,fb,lo2,hi2,zn,wn,lo2,z,err)
+         if(z-lo2<.25_dp*(hi2-lo2))call global_ratio(nz,ff,fp,fa,fb,lo2,hi2,zn,wn,lo2,z,err)
          if(.not.(z>lo2.and.z<hi2.and.err<=1e-10_dp*(hi2-lo2)))return
          if(kz/=6.and..not.(z>0))return
          trig=.true.
@@ -555,13 +561,9 @@ contains
 
 
 
-   ! Batch of normalized solves, same arguments per case as excali_one. The
-   ! common case (a starter from the tables or the near-parabolic series, or
-   ! a parabola, with the transfer angle not within 1e-4 of 0 or pi) runs in stages over
-   ! blocks of cases, so independent cases overlap: geometry and table
-   ! starter, one 8-node rectangle, velocities. Results are those of
-   ! excali_one, which solves every other case and any rectangle a stage does
-   ! not accept.
+   ! Batch of normalized solves, same arguments per case as excali_one, in
+   ! chunks of nb cases through solve_chunk (the code excali_one runs with
+   ! one case), so the results are identical.
    subroutine excali_batch(n,r1,r2,tof,direction,v1,v2,status,half,nrev,branch)
    integer,intent(in)   :: n
    real(dp),intent(in)  :: r1(3,n),r2(3,n),tof(n)
@@ -580,12 +582,10 @@ contains
    !$omp end parallel do
    end subroutine excali_batch
 
-   ! nc <= nb normalized solves, stage by stage so that independent cases
-   ! overlap: geometry; table starters (zero revolutions: tables and the
-   ! near-parabolic series; multiple revolutions: feasibility, minimum-time
-   ! location and branch root); one 8-node rectangle whose width is at most
-   ! 1/16 of a lower bound on the distance to every singularity, so that it
-   ! is final; the general path for anything it does not certify; velocities.
+   ! nc <= nb normalized solves, stage by stage so independent cases overlap:
+   ! geometry; table starters; one rectangle (3 or 8 nodes) at a fixed fraction
+   ! of a lower bound on the distance to every singularity; general_root off
+   ! the tables; velocities. Zero-revolution ellipses take exactly one path.
    subroutine solve_chunk(nc,r1c,r2c,tofc,dirc,v1c,v2c,statc,halfc,nrev,branch,pnormal)
    integer,intent(in)   :: nc
    real(dp),intent(in)  :: r1c(3,nc),r2c(3,nc),tofc(nc)
@@ -596,6 +596,7 @@ contains
    type(frame) :: gc(nb)
    real(dp) :: xc(nb),cc(nb),hsc(nb),hcc(nb),wbc(nb),lbc(nb),ubc(nb),ddc(nb),dec(nb),yyc(nb),elc,vsc,chord,semi
    integer :: kc(nb),kd(nb),krc(nb),j
+   real(dp) :: dtc(nb),tauc(nb)
    logical :: fast(nb),scc(nb),nearc(nb),trig(nb),eightc(nb)
    ! Stage 1: geometry and the table coordinates (multiple revolutions: the
    ! tables themselves).
@@ -607,7 +608,7 @@ contains
       if(statc(j)/=-4)cycle
       lbc(j)=0;ubc(j)=pi;fast(j)=.true.
       if(nrev(j)==0)then
-         call table_coordinates(gc(j),kc(j),cc(j),ddc(j),wbc(j),nearc(j))
+         call table_coordinates(gc(j),kc(j),cc(j),ddc(j),wbc(j),nearc(j),dtc(j))
       else
          ! Every ellipse through both points has a>=s/2, so T > m*2*pi*(s/2)**1.5
          ! (within 31% of the minimum time) rejects most infeasible times.
@@ -631,23 +632,29 @@ contains
    ! coordinate and width.
    do j=1,nc
       if(statc(j)/=-4.or.nrev(j)>0)cycle
-      call table_root(kc(j),cc(j),ddc(j),wbc(j),nearc(j),xc(j))
+      call table_root(kc(j),cc(j),ddc(j),wbc(j),nearc(j),dtc(j),xc(j))
+      tauc(j)=merge(abs(cc(j)),1._dp,.not.nearc(j))
       fast(j)=xc(j)>0.or.kc(j)==0
    enddo
    do j=1,nc
       if(.not.fast(j).or.kc(j)==0)cycle
       call fast_coordinate(kc(j),xc(j),nrev(j),gc(j)%b,wbc(j),lbc(j),ubc(j),kd(j),cc(j),elc,eightc(j),hsc(j),hcc(j))
+      ! Ellipses at |tau|>=0.75 or from the near-parabolic series: 8 nodes, R/8.
+      if(nrev(j)==0.and.kd(j)>0.and.tauc(j)>=.75_dp)then
+         elc=elc*32;eightc(j)=.true.
+      endif
       fast(j)=elc>0;krc(j)=kexp(elc)
    enddo
-   ! Stage 3: one 8-node rectangle each, then its certificate.
+   ! Stage 3: one rectangle each, then its acceptance.
    do j=1,nc
       if(fast(j).and.kc(j)/=0)call rect_ratio(kd(j),cc(j),hsc(j),hcc(j),krc(j),eightc(j),gc(j)%y0,merge(wbc(j),gc(j)%yend,kd(j)==-2),gc(j)%a,gc(j)%b, &
          gc(j)%t,nrev(j),ddc(j),dec(j),scc(j))
    enddo
    do j=1,nc
-      if(fast(j).and.kc(j)/=0)call fast_accept(kd(j),cc(j),krc(j),ddc(j),dec(j),scc(j),hsc(j),hcc(j),kc(j),xc(j),fast(j))
+      if(fast(j).and.kc(j)/=0)call fast_accept(kd(j),cc(j),krc(j),ddc(j),dec(j),scc(j),hsc(j),hcc(j),kc(j),xc(j),fast(j), &
+         nrev(j)==0.and.(kd(j)>0.or.(kd(j)==0.and.cc(j)>0)))
    enddo
-   ! Stage 4: the general path for the rest, then velocities.
+   ! Stage 4: the region formulas for the rest, then velocities.
    do j=1,nc
       yyc(j)=-1;trig(j)=.true.
       if(fast(j))then
@@ -679,7 +686,7 @@ contains
 
       ! Transfer frame, normalized by the larger radius: unit vectors, the
       ! transverse directions, |cos(theta/2)|, |sin(theta/2)|, s1=sqrt(r1),
-      ! s2=sqrt(r2), q=s1-s2 (without cancellation), a, b, y0=y(v=0), yend and
+      ! s2=sqrt(r2), q=s1-s2 (cancellation-free), a, b, y0=y(v=0), yend and
       ! ypi=y(pi), where y(v)=y0+2b*sin(v/2)**2 (b>=0) or yend-2b*cos(v/2)**2
       ! (b<0), and the normalized time t. status -4 means usable.
       pure subroutine geometry(r1,r2,tof,direction,g,status,half,plane_normal)
@@ -733,19 +740,19 @@ contains
       ! Zero-revolution starter in two steps. table_coordinates: k=0 for a
       ! parabola; k=1 (ellipse) or -1 (hyperbola, with the short-way branch
       ! point wb), the Lancaster-Blanchard tau and the table coordinate u
-      ! ((tp/t)**(1/3) or t/tp), or within 3% of the parabolic time (near) the
+      ! ((tp/t)**(1/3) or t/tp), or within 3.1% of the parabolic time (near) the
       ! second-order series reversion X in u. table_root: the root x in
-      ! coordinate k (2: pi-v near the upper pole); 0 when no starter applies.
-      pure subroutine table_coordinates(g,k,tau,u,wb,near)
+      ! coordinate k (2: pi-v near the upper pole); 0 outside the tables.
+      pure subroutine table_coordinates(g,k,tau,u,wb,near,dt)
          type(frame),intent(in)::g
          integer,intent(out)::k
-         real(dp),intent(out)::tau,u,wb
+         real(dp),intent(out)::tau,u,wb,dt
          logical,intent(out)::near
          real(dp)::tp,dc,sl,sw
          tp=sqrt(g%y0)*(g%y0*sqrt2/3+g%a)
-         tau=0;u=0;wb=0;k=0;near=.false.
+         tau=0;u=0;wb=0;k=0;near=.false.;dt=0
          if(abs(g%t-tp)<=4*epsilon(tp)*tp)return    ! parabola
-         near=abs(g%t-tp)<=.03_dp*tp
+         near=abs(g%t-tp)<=.031_dp*tp      ! meets the table at phi=0.99
          k=1;u=rcbrt(tp/g%t)
          if(g%t<tp)then
             k=-1;u=g%t/tp
@@ -759,12 +766,22 @@ contains
          else
             dc=sqrt(g%q*g%q*(g%s1+g%s2)**2+4*g%p*g%p*g%ss*g%ss);sl=(g%rn1+g%rn2+dc)/2   ! chord, semiperimeter
             tau=g%a/(sqrt2*sl)/(1+sqrt(dc/sl))
+            if(k>0)then
+               ! Elliptic table scale (table_v): (K/tp)**(1/3), K=pi*y(pi)**1.5/sqrt2,
+               ! for phi<=1/2, else (t-tp)/T0', T0'=dT/d(v**2) at the parabola.
+               if(u<=.5_dp)then
+                  dt=rcbrt(pi*g%ypi*sqrt(g%ypi)/(sqrt2*tp))
+               else
+                  sw=sqrt(g%y0)
+                  dt=(g%t-tp)/(sw*(g%y0*(rsqrt2/5)+g%b*(rsqrt2/2))+g%a*g%b/(4*sw))
+               endif
+            endif
          endif
       end subroutine
 
-      pure subroutine table_root(k,tau,u,wb,near,x)
+      pure subroutine table_root(k,tau,u,wb,near,dt,x)
          integer,intent(inout)::k
-         real(dp),intent(in)::tau,u,wb
+         real(dp),intent(in)::tau,u,wb,dt
          logical,intent(in)::near
          real(dp),intent(out)::x
          x=0
@@ -772,7 +789,7 @@ contains
          if(near)then
             if(u*k>0)x=sqrt(abs(u))
          elseif(k>0)then
-            x=table_v(tau,u)
+            x=table_v(tau,u,dt)
             if(x>.75_dp*pi)then
                x=pi-x;k=2
             endif
@@ -784,14 +801,14 @@ contains
          endif
       end subroutine
 
-      ! Coordinate, half-width el and half-angle functions of the centre for
-      ! the one-rectangle path. The bound on the distance to every
-      ! singularity of 1/(T-t) is min(v,pi-v), min(w,pi) or min(2w,wb-w), |X|
-      ! near the parabola (X=+-x**2, a series for |X|<=0.2), or the bracket
-      ! [lo,hi] ending at the minimum-time location for m>0. el is 1/16 of it
-      ! for 8 nodes (error ~(1/32)**16); the zero-revolution elliptic table
-      ! is usually within 0.3% of it, so there el is 1/256 of it for 3 nodes
-      ! (error ~(1/512)**6), and fast_accept rejects the ~1% it misses.
+      ! Coordinate, half-width el and centre half-angle functions of the
+      ! rectangle. Every singularity of 1/(T-t) lies at least R from the root:
+      ! min(v,pi-v) for ellipses (sqrt(y) branch points, mirror root, pole),
+      ! min(w,pi) or min(2w,wb-w) for hyperbolas, |X| near the parabola, the
+      ! bracket [lo,hi] for m>0. kexp rounds el down to a power of two.
+      ! Ellipses: 3 nodes at R/256 (solve_chunk widens |tau|>=0.75 and the
+      ! near-parabolic series to 8 nodes at R/8), X 8 nodes at |X|/8; other
+      ! cases 8 nodes at R/16.
       pure subroutine fast_coordinate(k,x,m,b,wb,lo,hi,kind1,c,el,eight,hs,hc)
          integer,intent(in)::k,m
          real(dp),intent(in)::x,b,wb,lo,hi
@@ -805,6 +822,7 @@ contains
          elseif(abs(k)==1.and.x<.3_dp)then
             kind1=0;c=k*x*x
             el=min(abs(c),.2_dp-abs(c))
+            if(k>0)el=min(2*abs(c),.2_dp-abs(c))
             if(k<0.and.b>0)el=min(el,wb*wb-abs(c))
          elseif(k>0)then
             el=min(c,pi-c)/16;eight=.false.  ! k=2: x is already pi-v
@@ -820,18 +838,20 @@ contains
          el=el/16
       end subroutine
 
-      ! Certify the rectangle (sign change, estimate inside, error estimate at
-      ! rounding) and move the root and its half-angle functions to it.
-      pure subroutine fast_accept(kind1,c,kr,dd,de,sc,hs,hc,k,x,ok)
+      ! Accept the rectangle and move the root and its half-angle functions to
+      ! it: always when final (zero-revolution ellipses), else on a sign change
+      ! of T-t, the estimate inside and the error estimate at rounding.
+      pure subroutine fast_accept(kind1,c,kr,dd,de,sc,hs,hc,k,x,ok,final)
          integer,intent(in)::kind1,kr
          real(dp),intent(in)::c,dd,de
-         logical,intent(in)::sc
+         logical,intent(in)::sc,final
          real(dp),intent(inout)::hs,hc
          integer,intent(inout)::k
          real(dp),intent(inout)::x
          logical,intent(out)::ok
          real(dp)::cn
-         ok=sc.and.abs(dd)<.8_dp*pow2m(kr).and.de<=4*epsilon(c)*max(abs(c),merge(1e-2_dp,0._dp,kind1==0))
+         ok=final.and.abs(dd)<huge(dd)
+         ok=ok.or.(sc.and.abs(dd)<.8_dp*pow2m(kr).and.de<=4*epsilon(c)*max(abs(c),merge(1e-2_dp,0._dp,kind1==0)))
          if(.not.ok)return
          cn=c+dd
          if(kind1==0)then
@@ -882,7 +902,7 @@ contains
                   y=g%yend-2*g%b*ch*ch
                endif
             elseif(k==-2)then
-               ! From xi = wb-w: sinh(w/2), cosh(w/2) and y without cancellation.
+               ! From xi = wb-w: sinh(w/2), cosh(w/2) and y in cancellation-free form.
                p=sqrt(g%y0/(2*g%b));c=sqrt(1+p*p)                  ! sinh, cosh of wb/2
                y=2*g%b*(2*p*c*ch-(1+2*p*p)*sh)*sh
                dc=p*ch-c*sh;ch=c*ch-p*sh;sh=dc
@@ -892,8 +912,8 @@ contains
                y=g%y0-2*g%b*sh*sh
                ! Short way near the branch point, y cancels; T = sqrt(y)*(y*F+a) = t
                ! gives it with that error reduced by y*F/(y*F+a) when a
-               ! dominates, and the half-angle functions follow from it
-               ! without cancellation.
+               ! dominates, and the half-angle functions follow from it in
+               ! cancellation-free form.
                if(g%b>0.and.y<g%y0/4)then
                   call fhyp_d(x,2*sh*ch,c,dc,s);dc=y*dc
                   if(dc<g%a)then
@@ -924,22 +944,23 @@ contains
    end subroutine solve_chunk
 
    ! Zero-height thin rectangle on [c-L,c+L], L=2**(-kr): Gauss-Legendre
-   ! 8 (stage 1) or 3 (stage 2) nodes plus the two endpoints. dd=Q1/Q0
-   ! locates the enclosed root; de=|Q2/Q0-dd**2|/L vanishes for a single
-   ! pole and measures the error; sc certifies a sign change of T-t.
-   ! Nodes (kind 0: X=k*x**2 series; 1: v; 2: pi-v; -1: w) are evaluated
-   ! in one fused loop per coordinate; hs,hc are the half-angle functions
-   ! of c and the tables those of L*u, combined by angle addition.
-   ! Zero-height ratio over [lo,hi] with the 32-node rule (nodes xn, weights
+   ! 8 or 3 nodes (eight) plus the two endpoints. dd=Q1/Q0 locates the
+   ! enclosed root; de=|Q2/Q0-dd**2|/L vanishes for a single pole and
+   ! estimates the error; sc reports a sign change of T-t.
+   ! Nodes (kind 0: X=k*x**2 series; 1: v; 2: pi-v; -1: w; -2: xi=wb-w) are
+   ! evaluated in one fused loop per coordinate; hs,hc are the half-angle
+   ! functions of c and the tables those of L*u, combined by angle addition.
+   ! Zero-height ratio over [lo,hi] with an n-node rule (nodes xn, weights
    ! wn including the half-width): root = c + Q[((v-c)f)']/Q[f'] for the one
    ! simple pole of f inside, where Q[g'] = g(hi)-g(lo)-sum wn*g'. f, fp: f
    ! and f' at the nodes; fa, fb: f at lo and hi; c: moment centre (any; one
    ! near the root keeps its precision). err = |Q2/Q0-(Q1/Q0)**2|/(hi-lo)
    ! vanishes for a pure pole.
-   pure subroutine global_ratio(f,fp,fa,fb,lo,hi,xn,wn,c,root,err)
-      real(dp),intent(in)::f(ng),fp(ng),fa,fb,lo,hi,xn(ng),wn(ng),c
+   pure subroutine global_ratio(n,f,fp,fa,fb,lo,hi,xn,wn,c,root,err)
+      integer,intent(in)::n
+      real(dp),intent(in)::f(n),fp(n),fa,fb,lo,hi,xn(n),wn(n),c
       real(dp),intent(out)::root,err
-      real(dp)::q0,q1,q2,e(ng),d
+      real(dp)::q0,q1,q2,e(n),d
       e=xn-c
       q0=fb-fa-sum(wn*fp)
       q1=(hi-c)*fb-(lo-c)*fa-sum(wn*(f+e*fp))
@@ -1228,7 +1249,7 @@ contains
       endif
    end subroutine
 
-   ! sin(c/2) and cos(c/2) for 0<=c<=pi without a library call: reduction
+   ! sin(c/2) and cos(c/2) for 0<=c<=pi from polynomials: reduction
    ! to |y|<=pi/4 (pi/2-c/2 is exact there, Sterbenz) and Taylor polynomials
    ! (truncation below 5e-17). Other c use the intrinsics.
    elemental subroutine sincos_half(c,s,co)
@@ -1292,8 +1313,8 @@ contains
       y=e*ln2+2*z*(1+q*(1._dp/3+q*(.2_dp+q*(1._dp/7+q*(1._dp/9)))))
    end function
 
-   ! Cube root to ~2e-5 for the closed-form starters (the contour sets the
-   ! accuracy): exponent/3 bit estimate (3%) and one Halley correction; a
+   ! Cube root to ~2e-5 for starters and table coordinates (the contour sets
+   ! the accuracy): exponent/3 bit estimate (3%) and one Halley correction; a
    ! second correction (fine) gives ~1e-15.
    elemental real(dp) function rcbrt(x,fine) result(y)
       real(dp),intent(in)::x
@@ -1313,11 +1334,13 @@ contains
       endif
    end function
 
-   ! Zero-revolution root v from the tables at tau=lam/(1+sqrt(1-lam**2)) and
-   ! phi=(tp/t)**(1/3): A=(pi-v)/phi for phi<=1/2, B=v**2/(1-phi) above, by
-   ! local 4x4 cubic Lagrange interpolation. 0 outside the tables.
-   pure real(dp) function table_v(tau,phi) result(v)
-      real(dp),intent(in)::tau,phi
+   ! Zero-revolution elliptic root v from the tables at tau=lam/(1+sqrt(1-lam**2))
+   ! and phi=(tp/t)**(1/3), by local 4x4 cubic Lagrange interpolation:
+   ! A=(pi-v)/(phi*sc) for phi<=1/2, sc=(K/tp)**(1/3) from the pole asymptote
+   ! T ~ K/(pi-v)**3, and B=v**2/sc above, sc=(t-tp)/T0', T0'=dT/d(v**2) at
+   ! the parabola. Both tend to 1 at their ends. 0 outside the tables.
+   pure real(dp) function table_v(tau,phi,sc) result(v)
+      real(dp),intent(in)::tau,phi,sc
       real(dp)::u,wt(4),ws(4),r(4)
       integer::i,j,h
       v=0
@@ -1333,9 +1356,9 @@ contains
       r=wt(1)*tab(i+1,j+1:j+4,h)+wt(2)*tab(i+2,j+1:j+4,h)+wt(3)*tab(i+3,j+1:j+4,h)+wt(4)*tab(i+4,j+1:j+4,h)
       u=(ws(1)*r(1)+ws(2)*r(2))+(ws(3)*r(3)+ws(4)*r(4))
       if(h==1)then
-         v=pi-phi*u
+         v=pi-phi*sc*u
       else
-         v=sqrt(max(u*(1-phi),0._dp))
+         v=sqrt(max(u*sc,0._dp))
       endif
       if(.not.(v>0.and.v<pi))v=0
    end function

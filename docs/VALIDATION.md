@@ -358,3 +358,53 @@ Every case the tables do not settle now goes to one fixed 32-point zero-height r
     | near-`t_min` | 390 ns | 868 ns |
 
     These are single runs, M1 Pro under load.
+
+## Single path for zero-revolution ellipses (2026-11-04)
+
+Zero-revolution ellipses take one path: geometry → starter → one fixed Gauss–Legendre rectangle → `Q1/Q0` → velocities. The rectangle's result is final: it has no certificate, retry or fallback. Ellipses outside the tables (`|tau| > 0.9`) go directly to their region formula.
+
+- **Normalized elliptic table.** The table now stores `(pi-v)/(s*ck)` and `v^2*T0'/(t-t_p)`, the root divided by its pole and parabola asymptotes. Its error relative to the singularity bound `min(v, pi-v)` falls from 10% to 3.9% (worst case up to `|tau| = 0.9`), and to 0.11% for `|tau| < 0.75`. The table size is unchanged (32×32×2), and the hyperbolic and multi-revolution tables are byte-identical.
+- **Node count, fixed before evaluation.** 3 nodes at half-width bound/256 for `|tau| < 0.75`; 8 nodes at bound/8 for `|tau| >= 0.75` and the near-parabolic series. The near-parabolic window widens from 3% to 3.1% of `t_p`, so it meets the table at `s = 0.99`.
+- **Measured starter errors** (66,114 ellipses of the truth sets, relative to `min(v, pi-v)`):
+
+  | Starter | Median | p99 | Max |
+  |---|---:|---:|---:|
+  | Previous table | 3e-5 | 4.2e-2 | 1.0e-1 |
+  | Near-parabolic series | — | — | 7.8e-2 |
+  | Closed-form Hermite | — | — | 6.1 |
+
+  The closed-form Hermite starter of earlier versions fails near `|b/(y0+b)| -> 1`.
+- **Alternatives tried:**
+  - Without the normalized table, one 8-node rectangle at bound/8 misses roots (34 failures in 40,000). At bound/4 it solves everything but loses accuracy (worst 3.5e-12 against 1.2e-13).
+  - A 3-node rule everywhere needs a starter within 0.16%.
+  - Tabulating the two scale factors in `tau` was too inaccurate: `t_p/T0'` spans five orders of magnitude and interpolates to 21% error.
+  - The kept form computes the one factor its side of the table needs.
+- **Truth sets** (119,531 cases): failure counts and maximum errors identical to the previous version in every category.
+- **Stress sets:** 40,000 zero-revolution and 24,000 multi-revolution cases, 0 failures (the original: 1 and 12).
+- **Tests.** Lamberts-Comparison CTest 9/9 (Release, Debug), standalone 3/3.
+- **benchmark_mixed** (3 interleaved runs, against the original EXCALI before 2026-11-03): zero failures. Elliptic classes take 0.99–1.035 of the original's time, within this machine's run-to-run spread. A controlled circular-transfer timing gives 153 ns for both.
+- **Code generation.** Adding the 8-node branch inside `fast_coordinate` cost 14 ns on circular transfers that never take it, so `solve_chunk` widens the rectangle after the call instead.
+- **24-point region formulas.** The per-region formulas (`ratio_root`) use 24 Gauss–Legendre points instead of 32.
+  - Accuracy is identical in every truth category; 16 points lose accuracy (up to 4.9e-12).
+  - The multi-revolution minimum keeps 32 points.
+  - `excali_batch` on the 70,000 elliptic truth cases (zero_rev categories 1, 3, 4; one thread):
+
+    | Version | Time per case |
+    |---|---:|
+    | Original EXCALI | 140 ns |
+    | Previous version | 207 ns |
+    | Single path, 32 points | 200 ns |
+    | Single path, 24 points | 186 ns |
+
+    The gap to the original comes from the degenerate ellipses of category 3 (chord under 1% of the semiperimeter, `|tau| > 0.9`). They use the region formulas, where the original used starters, rectangles and the bracketed contour.
+- **Single-solve profile** of a circular transfer: geometry and table coordinates 37 ns; table lookup, coordinate and centre trig 50 ns; rectangle 42 ns; acceptance 15 ns; velocities 10 ns.
+- **Measured and not kept** (circular-transfer timing, 153 ns):
+
+  | Change | Saving |
+  |---|---|
+  | Skipping the second moment and error estimate for ellipses | 1 ns or less |
+  | A three-term shift series in `rotate` | 0.5 ns |
+  | A specialized, unrolled 3-node elliptic rectangle | 2 ns, for about 30 more lines |
+  | Tabulated table scales | made the table up to 21% wrong |
+- **Next step for speed on degenerate geometry.** Tables valid up to `|tau| -> 1` would put those ellipses on the single path too. The normalized transforms extend smoothly on the parabola side, but the pole-side split at `s = 1/2` must follow the parabola–pole transition, which moves to `s ~ beta^(1/3)`.
+- **Size.** `src/excali_solver.f90` is 1,596 lines, against 1,573 before. The additional lines are the 24-point constants, the per-side table scale and the 8-node widening.
