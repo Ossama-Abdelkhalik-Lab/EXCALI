@@ -1,8 +1,10 @@
 ! EXCALI (EXact Cauchy-Analytic Lambert Integration): Lambert's problem for
 ! every conic and revolution count from the zero-height limit of Exact v2.2's
 ! thin-rectangle ratio, root = c + Q[((x-c)f)']/Q[f'], f = 1/(T-t), by real
-! Gauss-Legendre quadrature: a table starter and one fixed rectangle, or, off
-! the tables, one fixed ratio over a region chosen from the geometry.
+! Gauss-Legendre quadrature. Zero revolutions: a table or closed-form starter
+! and one fixed rectangle, no iteration and no fallback. Multiple revolutions:
+! a table starter and one certified rectangle, or fixed ratios over regions
+! chosen from the geometry.
 ! Geometry and time functions adapted from ConfluentContour's contour_simple.
 module excali_solver
    use iso_fortran_env, only: real64, int64
@@ -141,29 +143,21 @@ contains
    v1=w1(:,1);v2=w2(:,1);status=st(1);half=hf(1)
    end subroutine excali_one
 
-   ! Region formulas for cases off the tables (and hyperbolic or multi-revolution
-   ! rectangles that fail their certificate): one fixed ratio over a region
-   ! chosen from the geometry, in a coordinate free of singularities near the
-   ! root. Returns the root in coordinate k with its half-angle functions (or
-   ! Y=sqrt(y) in yy); status 0/1 solved, 5 below the minimum time, -4 failed.
-   subroutine general_root(g,m,br,k,x,hs,hc,trig,yy,status)
+   ! Multiple revolutions off the tables (or whose rectangle fails its
+   ! certificate): fixed ratios over regions chosen from the geometry, in a
+   ! coordinate free of singularities near the root. Returns the root in
+   ! coordinate k with its half-angle functions; status 0/1 solved, 5 below
+   ! the minimum time, -4 failed.
+   subroutine general_root(g,m,br,k,x,hs,hc,trig,status)
    type(frame),intent(in) :: g
    integer,intent(in)     :: m,br
    integer,intent(out)    :: k,status
-   real(dp),intent(out)   :: x,hs,hc,yy
+   real(dp),intent(out)   :: x,hs,hc
    logical,intent(out)    :: trig
-   real(dp) :: rn1,rn2,ss,a,b,y0,yend,ypi,t,tp,lo,hi,tmin,d(0:3),c,dc,tref,s3,s0
+   real(dp) :: rn1,rn2,ss,a,b,y0,yend,ypi,t,lo,hi,tmin,d(0:3),c,dc,tref,s3,s0
    rn1=g%rn1;rn2=g%rn2;ss=g%ss;a=g%a;b=g%b;y0=g%y0;yend=g%yend;ypi=g%ypi;t=g%t
-   trig=.false.;status=-4;x=0;hs=0;hc=1;k=1;yy=-1;s0=0
-   if(m==0)then
-      tp=sqrt(y0)*(y0*sqrt2/3+a)                                 ! parabolic time
-      if(abs(t-tp)<=4*epsilon(t)*tp)then
-         status=0;return                                         ! parabola, x=0
-      endif
-      tref=tp
-      if(fixed_root())status=0
-      return
-   endif
+   trig=.false.;status=-4;x=0;hs=0;hc=1;k=1;s0=0
+   if(m==0)return             ! zero revolutions all take the table path
    ! Multiple revolutions. Every ellipse through both points has a>=s/2,
    ! so T > m*2*pi*(s/2)**1.5 (within 31% of the minimum time) rejects
    ! most infeasible times from the geometry alone.
@@ -342,48 +336,6 @@ contains
          status=0;r=0
       end function
 
-
-
-      ! Zero-revolution hyperbolas off the tables (every ellipse has a table or
-      ! closed-form starter): the region decides the coordinate, in which the
-      ! root's neighbourhood is free of singularities for every geometry. Y on
-      ! [0,0.9*sqrt(y(pi))] when b>0 and T there exceeds t (kind 1); else X for
-      ! w<=1.75 (kind 6); else w around the asymptotic root (kind 7).
-      logical function fixed_root() result(ok)
-         real(dp)::lo2,hi2,tz,fz,fpz,cc,e
-         integer::kz
-         ok=.false.
-         if(t>tp)return
-         s3=cbrt_c(tref/t)
-         kz=0
-         if(b>0)then
-            hi2=.9_dp*sqrt(ypi)
-            call zeval(1,hi2,fz,fpz,tz)
-            if(tz>t)then
-               kz=1;lo2=0
-            endif
-         endif
-         if(kz==0)then
-            call zeval(7,1.75_dp,fz,fpz,tz)                  ! T(w=1.75)
-            if(t>=tz)then
-               kz=6;lo2=xlow();hi2=2.2_dp**2
-            else
-               ! Large w: T ~ sqrt2*c*sqrt(c-b*E/2)/E, E=exp(w), c=y0+b.
-               kz=7;cc=y0+b
-               e=(-cc*cc*b+sqrt((cc*cc*b)**2+8*t*t*cc**3))/(2*t*t)
-               lo2=max(1.5_dp,log(e)-2);hi2=lo2+4
-               if(b>0)hi2=min(hi2,2*asinh(sqrt(y0/(2*b)))-.5_dp)
-            endif
-         endif
-         ok=ratio_root(kz,lo2,hi2)
-      end function
-
-      ! Lower end of the X interval: clear of the short-way branch point.
-      real(dp) function xlow() result(xa)
-         xa=-4
-         if(b>0)xa=max(xa,-2*asinh(sqrt(y0/(2*b)))**2)
-      end function
-
       ! Multi-revolution branch outside the minimum's interval [lo,hi] (lo=hi=v*
       ! after the whole-interval ratio): sigma=(tmin/T)**(1/3) from
       ! the pole to the interval, in zeta about the pole when the sqrt(y)
@@ -409,7 +361,7 @@ contains
       end function
 
       ! One fixed 24-node ratio in coordinate kz on [l0,h0], certified by
-      ! the signs at the ends and the second moment; sets k, x, hs, hc (or yy).
+      ! the signs at the ends and the second moment; sets k, x, hs, hc.
       ! In zeta the singularities lie at height pi/2 while the interval grows
       ! like log(1/s0), so it is cut into equal pieces of length <= 4 and the
       ! piece holding the sign change is taken.
@@ -442,11 +394,9 @@ contains
          ! moment taken about that end.
          if(z-lo2<.25_dp*(hi2-lo2))call global_ratio(nz,ff,fp,fa,fb,lo2,hi2,zn,wn,lo2,z,err)
          if(.not.(z>lo2.and.z<hi2.and.err<=1e-10_dp*(hi2-lo2)))return
-         if(kz/=6.and..not.(z>0))return
+         if(.not.(z>0))return
          trig=.true.
          select case(kz)
-          case(1)
-            yy=z
           case(2)
             k=2;x=z;call sincos_half(x,hs,hc)
           case(3,4)
@@ -455,63 +405,19 @@ contains
             x=2*asin(hs)
           case(5)
             k=1;x=z;call sincos_half(x,hs,hc)
-          case(6)
-            x=sqrt(abs(z))
-            if(z>=0)then
-               k=1;call sincos_half(x,hs,hc)
-            else
-               k=-1;call shch(x/2,hs,hc)
-            endif
-          case(7)
-            k=-1;x=z;call shch(x/2,hs,hc)
          end select
          ok=.true.
       end function
 
-      ! f, f' and T at z in coordinate kz, for f = 1/g with g increasing:
-      !  1 Y=sqrt(y), g=T-t; T=Y*(Y**2*F+a) with y=Y**2 exact and F from
-      !    q=sin(v/2)**2=(y-y0)/(2b) (negative on hyperbolas);
-      !  2 d=pi-v, 3 zeta about pi (sin(d/2)=s0*sinh), 4 zeta about 0
-      !    (sin(v/2)=s0*sinh), 5 v: g=sigma-s3, sigma=(tref/T)**(1/3), which is
-      !    zero at a pole (z=0 there);
-      !  6 X=+-v**2: g=T-t;  7 w: g=log(t/T).
+      ! f, f' and T at z in coordinate kz (multi-revolution branches), for
+      ! f = 1/g with g = sigma-s3 increasing, sigma=(tref/T)**(1/3), which is
+      ! zero at a pole (z=0 there): 2 d=pi-v, 3 zeta about pi
+      ! (sin(d/2)=s0*sinh), 4 zeta about 0 (sin(v/2)=s0*sinh), 5 v.
       subroutine zeval(kz,z,f,fp,tt)
          integer,intent(in)::kz
          real(dp),intent(in)::z
          real(dp),intent(out)::f,fp,tt
-         real(dp)::q,u1,u2,xx,fd(0:3),dt,sg,dd(0:3),sh,ch
-         select case(kz)
-          case(1)
-            if(z==0)then
-               tt=0;f=-1/t;fp=0;return
-            endif
-            q=(z*z-y0)/(2*b);u1=sqrt(abs(q));u2=sqrt(1-q)
-            if(q>=0)then
-               xx=2*asin(u1);call f_derivs(xx,1,0,fd,2*u1*u2,1-2*q)
-               dt=fd(1)/(u1*u2)                         ! dF/dq
-            else
-               xx=2*asinh(u1);call f_derivs(xx,-1,0,fd,2*u1*u2,1-2*q)
-               dt=-fd(1)/(u1*u2)
-            endif
-            tt=z*(z*z*fd(0)+a)
-            dt=3*z*z*fd(0)+a+z**4*dt/b
-            f=1/(tt-t);fp=-dt*f*f
-            return
-          case(6)
-            xx=sqrt(abs(z))
-            if(z>=0)then
-               call sincos_half(xx,sh,ch);call time_derivs(xx,1,0,y0,yend,a,b,dd,sh,ch)
-               dt=dd(1)/(2*xx)
-            else
-               call time_derivs(xx,-1,0,y0,yend,a,b,dd);dt=-dd(1)/(2*xx)
-            endif
-            tt=dd(0);f=1/(tt-t);fp=-dt*f*f
-            return
-          case(7)
-            call time_derivs(z,-1,0,y0,yend,a,b,dd)
-            tt=dd(0);sg=log(t/tt);f=1/sg;fp=dd(1)/tt*f*f   ! g'=-T'/T
-            return
-         end select
+         real(dp)::u1,u2,dt,sg,dd(0:3),sh,ch
          if(z==0)then
             tt=huge(z);f=-1/s3;fp=0;return               ! pole: sigma=0
          endif
@@ -565,9 +471,10 @@ contains
    end subroutine excali_batch
 
    ! nc <= nb normalized solves, stage by stage so independent cases overlap:
-   ! geometry; table starters; one rectangle (3 or 8 nodes) at a fixed fraction
-   ! of a lower bound on the distance to every singularity; general_root off
-   ! the tables; velocities. Zero-revolution ellipses take exactly one path.
+   ! geometry; table or closed-form starters; one rectangle (3 or 8 nodes) at a
+   ! fixed fraction of a lower bound on the distance to every singularity;
+   ! general_root for multiple revolutions off the tables; velocities. Every
+   ! zero-revolution case takes exactly one path.
    subroutine solve_chunk(nc,r1c,r2c,tofc,dirc,v1c,v2c,statc,halfc,nrev,branch,pnormal)
    integer,intent(in)   :: nc
    real(dp),intent(in)  :: r1c(3,nc),r2c(3,nc),tofc(nc)
@@ -576,7 +483,7 @@ contains
    integer,intent(out)  :: statc(nc),halfc(nc)
    real(dp),optional,intent(in) :: pnormal(3)
    type(frame) :: gc(nb)
-   real(dp) :: xc(nb),cc(nb),hsc(nb),hcc(nb),wbc(nb),lbc(nb),ubc(nb),ddc(nb),dec(nb),yyc(nb),elc,vsc,chord,semi
+   real(dp) :: xc(nb),cc(nb),hsc(nb),hcc(nb),wbc(nb),lbc(nb),ubc(nb),ddc(nb),dec(nb),elc,vsc,chord,semi
    integer :: kc(nb),kd(nb),krc(nb),j
    real(dp) :: dtc(nb),tauc(nb)
    logical :: fast(nb),scc(nb),nearc(nb),trig(nb),eightc(nb)
@@ -628,6 +535,10 @@ contains
       if(nrev(j)==0.and.kd(j)>0.and.tauc(j)>=.75_dp)then
          elc=elc*merge(64,32,tauc(j)>1.5_dp);eightc(j)=.true.
       endif
+      ! Hyperbolic closed form (within 1.1%): 8 nodes, R/8.
+      if(nrev(j)==0.and.kd(j)<0.and.tauc(j)>1.5_dp)then
+         elc=elc*32;eightc(j)=.true.
+      endif
       fast(j)=elc>0;krc(j)=kexp(elc)
    enddo
    ! Stage 3: one rectangle each, then its acceptance.
@@ -637,19 +548,19 @@ contains
    enddo
    do j=1,nc
       if(fast(j).and.kc(j)/=0)call fast_accept(kd(j),cc(j),krc(j),ddc(j),dec(j),scc(j),hsc(j),hcc(j),kc(j),xc(j),fast(j), &
-         nrev(j)==0.and.(kd(j)>0.or.(kd(j)==0.and.cc(j)>0)))
+         nrev(j)==0)
    enddo
-   ! Stage 4: the region formulas for the rest, then velocities.
+   ! Stage 4: the multi-revolution region formulas for the rest, then velocities.
    do j=1,nc
-      yyc(j)=-1;trig(j)=.true.
+      trig(j)=.true.
       if(fast(j))then
          statc(j)=0
          if(kc(j)==0)then
             kc(j)=1;xc(j)=0;hsc(j)=0;hcc(j)=1              ! parabola
          endif
       elseif(statc(j)==-4)then
-         call general_root(gc(j),nrev(j),branch(j),kc(j),xc(j),hsc(j),hcc(j),trig(j),yyc(j),statc(j))
-         if(yyc(j)<0.and..not.trig(j))then
+         call general_root(gc(j),nrev(j),branch(j),kc(j),xc(j),hsc(j),hcc(j),trig(j),statc(j))
+         if(.not.trig(j))then
             if(kc(j)>0)then
                call sincos_half(xc(j),hsc(j),hcc(j))
             else
@@ -658,7 +569,7 @@ contains
          endif
       endif
       if(statc(j)==0.or.statc(j)==1)then
-         call velocities(gc(j),r1c(:,j),r2c(:,j),dirc(j),kc(j),xc(j),hsc(j),hcc(j),nearc(j),yyc(j),v1c(:,j),v2c(:,j))
+         call velocities(gc(j),r1c(:,j),r2c(:,j),dirc(j),kc(j),xc(j),hsc(j),hcc(j),nearc(j),v1c(:,j),v2c(:,j))
          if(.not.all(ieee_is_finite(v1c(:,j))).or..not.all(ieee_is_finite(v2c(:,j))))statc(j)=-4
       endif
       if(statc(j)/=0.and.statc(j)/=1)then
@@ -726,14 +637,16 @@ contains
       ! parabola; k=1 (ellipse) or -1 (hyperbola, with the short-way branch
       ! point wb), the Lancaster-Blanchard tau and the table coordinate u
       ! ((tp/t)**(1/3) or t/tp), or within 3.1% of the parabolic time (near) the
-      ! second-order series reversion X in u. table_root: the root x in
-      ! coordinate k (2: pi-v near the upper pole); 0 outside the tables.
+      ! second-order series reversion X in u, or for hyperbolas at t/tp<0.1
+      ! the closed-form root itself (tau=2). table_root: the root x in
+      ! coordinate k (2: pi-v near the upper pole; -2: xi=wb-w near the
+      ! short-way branch point).
       pure subroutine table_coordinates(g,k,tau,u,wb,near,dt)
          type(frame),intent(in)::g
          integer,intent(out)::k
          real(dp),intent(out)::tau,u,wb,dt
          logical,intent(out)::near
-         real(dp)::tp,dc,sl,sw
+         real(dp)::tp,dc,sl,sw,r0,r1
          tp=sqrt(g%y0)*(g%y0*sqrt2/3+g%a)
          tau=0;u=0;wb=0;k=0;near=.false.;dt=0
          if(abs(g%t-tp)<=4*epsilon(tp)*tp)return    ! parabola
@@ -748,6 +661,29 @@ contains
          endif
          if(near)then
             u=near_parabola_x(g%y0,g%a,g%b,g%t,tp)
+         elseif(k<0.and.u<tabh_u0)then
+            ! Hyperbola, t/tp<0.1: large-w closed form T = sqrt2*c*sqrt(y)/E,
+            ! E=exp(w), c=y0+b, y=c-b*E/2, a quadratic in E (rationalized on the
+            ! short way): w=log(E), or on the short way with y=(t*E/(sqrt2*c))**2
+            ! < y0/2 (xi < log 2) xi=wb-w (k=-2) from y, exactly and without
+            ! cancellation (cosh(w)=(c-y)/b). Within 1.1% of the singularity
+            ! distance for every tau. tau=2 marks the closed form.
+            sw=g%y0+g%b;dc=sqrt((sw*sw*g%b)**2+8*g%t*g%t*sw**3)
+            if(g%b>=0)then
+               dc=4*sw**3/(sw*sw*g%b+dc)
+            else
+               dc=(dc-sw*sw*g%b)/(2*g%t*g%t)
+            endif
+            tau=2;u=log(dc)
+            if(g%b>0)then
+               sl=(g%t*dc/(sqrt2*sw))**2                  ! y
+               if(sl<g%y0/2)then
+                  r0=sqrt(g%y0*g%ypi);r1=sqrt((g%y0-sl)*(g%ypi-sl))
+                  k=-2;u=log1p_c((sl+sl*(2*sw-sl)/(r0+r1))/(sw-sl+r1))
+               else
+                  u=min(u,.99_dp*wb)
+               endif
+            endif
          else
             dc=sqrt(g%q*g%q*(g%s1+g%s2)**2+4*g%p*g%p*g%ss*g%ss);sl=(g%rn1+g%rn2+dc)/2   ! chord, semiperimeter
             tau=g%a/(sqrt2*sl)/(1+sqrt(dc/sl))
@@ -803,9 +739,8 @@ contains
             if(x>.75_dp*pi)then
                x=pi-x;k=2
             endif
-         elseif(wb>0.and.u<tabh_px)then
-            x=table_xi(tau,u,wb)                ! k=-2: distance from the branch point
-            if(x>0)k=-2
+         elseif(tau>1.5_dp)then
+            x=u                                 ! hyperbolic closed form: w, or xi (k=-2)
          else
             x=table_w(tau,u,wb)
          endif
@@ -814,11 +749,12 @@ contains
       ! Coordinate, half-width el and centre half-angle functions of the
       ! rectangle. Every singularity of 1/(T-t) lies at least R from the root:
       ! min(v,pi-v) for ellipses (sqrt(y) branch points, mirror root, pole),
-      ! min(w,pi) or min(2w,wb-w) for hyperbolas, |X| near the parabola, the
-      ! bracket [lo,hi] for m>0. kexp rounds el down to a power of two.
-      ! Ellipses: 3 nodes at R/256 (solve_chunk widens |tau|>=0.75 and the
-      ! near-parabolic series to 8 nodes at R/8), X 8 nodes at |X|/8; other
-      ! cases 8 nodes at R/16.
+      ! min(w,pi) or min(2w,wb-w,pi) for hyperbolas in w, min(xi,2w,pi) in
+      ! xi=wb-w, |X| near the parabola, the bracket [lo,hi] for m>0. kexp rounds
+      ! el down to a power of two (el<=1 keeps the node tables in range).
+      ! Zero revolutions: 3 nodes at R/256 (solve_chunk widens the closed
+      ! forms and the ellipses at |tau|>=0.75 to 8 nodes at R/8 or R/4), X 8
+      ! nodes at |X|/8; multiple revolutions 8 nodes at R/16.
       pure subroutine fast_coordinate(k,x,m,b,wb,lo,hi,kind1,c,el,eight,hs,hc)
          integer,intent(in)::k,m
          real(dp),intent(in)::x,b,wb,lo,hi
@@ -838,18 +774,21 @@ contains
             el=min(c,pi-c)/16;eight=.false.  ! k=2: x is already pi-v
             call sincos_half(c,hs,hc)
          elseif(k==-2)then
-            el=min(c,2*(wb-c),pi)            ! xi: branch point, mirror root, w=+-i*pi
+            el=min(c,2*(wb-c),pi)/16;eight=.false.   ! xi: branch point, mirror root, w=+-i*pi
             call shch(c/2,hs,hc)
          else
+            ! w: mirror root -w (short way) or w=+-i*pi, the branch point wb, and
+            ! at large w the near-copies of the root at w+-2*pi*i (T ~ exp(-w)).
             el=min(c,pi)
-            if(b>0)el=min(2*c,wb-c)
+            if(b>0)el=min(2*c,wb-c,pi)
+            el=el/16;eight=.false.
             call shch(c/2,hs,hc)
          endif
          el=el/16
       end subroutine
 
       ! Accept the rectangle and move the root and its half-angle functions to
-      ! it: always when final (zero-revolution ellipses), else on a sign change
+      ! it: always when final (zero revolutions), else on a sign change
       ! of T-t, the estimate inside and the error estimate at rounding.
       pure subroutine fast_accept(kind1,c,kr,dd,de,sc,hs,hc,k,x,ok,final)
          integer,intent(in)::kind1,kr
@@ -880,62 +819,56 @@ contains
       end subroutine
 
       ! Velocities from the root x in coordinate k with half-angle functions
-      ! sw, dw (or from Y=sqrt(y)=yy>=0 for the shortest hyperbolas): radial and
-      ! transverse components, cancellation-free, or near the parabola and the
+      ! sw, dw: radial and transverse components, cancellation-free, or near the parabola and the
       ! short-way branch point (fine) Lagrange f,g in double-double.
-      pure subroutine velocities(g,r1,r2,direction,k,x,sw,dw,fine,yy,v1,v2)
+      pure subroutine velocities(g,r1,r2,direction,k,x,sw,dw,fine,v1,v2)
          type(frame),intent(in)::g
          real(dp),intent(in)::r1(3),r2(3),x,sw,dw
          integer,intent(in)::direction,k
          logical,intent(in)::fine
          real(dp),intent(out)::v1(3),v2(3)
-         real(dp),intent(in)::yy
          real(dp)::p,c,s,y,dc,sh,ch,vr1,vr2,vt1,vt2
          logical::fg
          p=sign(1.0_dp,g%a);fg=fine;sh=sw;ch=dw
-         if(yy>=0)then
-            y=yy*yy;dc=-2*(g%y0-y)/(2*g%b)-g%ss*g%ss/(1+g%cs)   ! cs-cosh(w), from y
+         if(k>0)then
+            c=(ch-sh)*(ch+sh);s=(2*sh*ch)**2
          else
-            if(k>0)then
-               c=(ch-sh)*(ch+sh);s=(2*sh*ch)**2
-            else
-               c=1+2*sh*sh;s=-(2*sh*ch)**2
-            endif
-            if(k==2)then
-               c=-c
-               y=g%y0+2*g%b*ch*ch
-               if(g%b<0)y=g%yend-2*g%b*sh*sh
-            elseif(k>0)then
-               if(g%b>=0)then
-                  y=g%y0+2*g%b*sh*sh
-               else
-                  y=g%yend-2*g%b*ch*ch
-               endif
-            elseif(k==-2)then
-               ! From xi = wb-w: sinh(w/2), cosh(w/2) and y in cancellation-free form.
-               p=sqrt(g%y0/(2*g%b));c=sqrt(1+p*p)                  ! sinh, cosh of wb/2
-               y=2*g%b*(2*p*c*ch-(1+2*p*p)*sh)*sh
-               dc=p*ch-c*sh;ch=c*ch-p*sh;sh=dc
-               c=1+2*sh*sh;s=-(2*sh*ch)**2;fg=.true.
-               p=sign(1.0_dp,g%a)
-            else
-               y=g%y0-2*g%b*sh*sh
-               ! Short way near the branch point, y cancels; T = sqrt(y)*(y*F+a) = t
-               ! gives it with that error reduced by y*F/(y*F+a) when a
-               ! dominates, and the half-angle functions follow from it in
-               ! cancellation-free form.
-               if(g%b>0.and.y<g%y0/4)then
-                  call fhyp_d(x,2*sh*ch,c,dc,s);dc=y*dc
-                  if(dc<g%a)then
-                     y=(g%t/(dc+g%a))**2
-                     sh=sqrt((g%y0-y)/(2*g%b));ch=sqrt(1+sh*sh);c=1+2*sh*sh;s=-(2*sh*ch)**2
-                     fg=.true.
-                  endif
-               endif
-            endif
-            dc=p*g%cs-c
-            if(p*g%cs*c>0.and.abs(p*g%cs+c)>0.5_dp)dc=(s-g%ss*g%ss)/(p*g%cs+c)
+            c=1+2*sh*sh;s=-(2*sh*ch)**2
          endif
+         if(k==2)then
+            c=-c
+            y=g%y0+2*g%b*ch*ch
+            if(g%b<0)y=g%yend-2*g%b*sh*sh
+         elseif(k>0)then
+            if(g%b>=0)then
+               y=g%y0+2*g%b*sh*sh
+            else
+               y=g%yend-2*g%b*ch*ch
+            endif
+         elseif(k==-2)then
+            ! From xi = wb-w: sinh(w/2), cosh(w/2) and y in cancellation-free form.
+            p=sqrt(g%y0/(2*g%b));c=sqrt(1+p*p)                  ! sinh, cosh of wb/2
+            y=2*g%b*(2*p*c*ch-(1+2*p*p)*sh)*sh
+            dc=p*ch-c*sh;ch=c*ch-p*sh;sh=dc
+            c=1+2*sh*sh;s=-(2*sh*ch)**2;fg=.true.
+            p=sign(1.0_dp,g%a)
+         else
+            y=g%y0-2*g%b*sh*sh
+            ! Short way near the branch point, y cancels; T = sqrt(y)*(y*F+a) = t
+            ! gives it with that error reduced by y*F/(y*F+a) when a
+            ! dominates, and the half-angle functions follow from it in
+            ! cancellation-free form.
+            if(g%b>0.and.y<g%y0/4)then
+               call fhyp_d(x,2*sh*ch,c,dc,s);dc=y*dc
+               if(dc<g%a)then
+                  y=(g%t/(dc+g%a))**2
+                  sh=sqrt((g%y0-y)/(2*g%b));ch=sqrt(1+sh*sh);c=1+2*sh*sh;s=-(2*sh*ch)**2
+                  fg=.true.
+               endif
+            endif
+         endif
+         dc=p*g%cs-c
+         if(p*g%cs*c>0.and.abs(p*g%cs+c)>0.5_dp)dc=(s-g%ss*g%ss)/(p*g%cs+c)
          if(fg.and.g%cs>.3_dp)then
             ! Lagrange f,g from the exact inputs: correctly rounded for this y
             ! (radial/transverse needs the rounded unit vectors).
@@ -990,7 +923,16 @@ contains
       integer::np,j,n
       logical::lw,us
       el=pow2m(kr)
-      if(eight)then
+      if(kr>kmax)then
+         ! Below 2**-62 (xi ~ t**2 at the shortest times): cos=cosh=1 and
+         ! sin=sinh=L*u/2 to rounding.
+         if(eight)then
+            np=n1+2;uu=u8;wq=w8
+         else
+            np=5;uu(1:5)=u3;wq(1:5)=w3
+         endif
+         ct=1;st=el*uu/2
+      elseif(eight)then
          np=n1+2;uu=u8;wq=w8
          if(kind1<0)then
             ct=ch8f(:,kr);st=sh8f(:,kr)
@@ -1454,56 +1396,35 @@ contains
       endif
    end function
 
-   ! Hyperbolic roots from tabh (see excali_tables.inc) at tau and u=t/tp, on
-   ! a grid in sqrt|tau|; wb is the short-way branch point. table_w gives w
-   ! (short way u>=0.1, or long way), table_xi gives xi = wb-w (short way
-   ! u<0.1). 0 outside the tables.
+   ! Hyperbolic table starter for u=t/tp in [0.1,0.99] on a grid in sqrt|tau|
+   ! (clamped at 1-1e-6, where the limit w/wb -> sqrt(1-u**2) is regular):
+   ! w**2 = tabh*(1-u)*wn**2 with L=1-log(u), wn=L on the long way and
+   ! wn**2 = L**2*(1-exp(-wb**2/L**2)) on the short way (wb the branch point).
    pure real(dp) function table_w(tau,u,wb) result(w)
       real(dp),intent(in)::tau,u,wb
-      real(dp)::v
-      integer::h
+      real(dp)::r,l2,z,s,c,g,wt(4),ws(4),cl(4)
+      integer::i,j,h
       w=0
-      if(tau>0)then
-         h=1;v=u
-         if(.not.(v>=tabh_ps.and.u<=.99_dp))return
-         v=(v-tabh_ps)/(1-tabh_ps)
-      else
-         h=2;v=rcbrt(u)
-         if(.not.(v>=tabh_pl.and.u<=.99_dp))return
-         v=(v-tabh_pl)/(1-tabh_pl)
-      endif
-      v=tabh_at(tau,v,h)
-      if(h==1)then
-         w=sqrt(max(v*(1-u),0._dp))*wb
-         if(.not.(w<wb))w=0
-      else
-         w=sqrt(max(v*(1-u),0._dp))*(1-rlog(u))
-      endif
-      if(.not.(w>0))w=0
-   end function
-
-   pure real(dp) function table_xi(tau,u,wb) result(xi)
-      real(dp),intent(in)::tau,u,wb
-      xi=0
-      if(.not.(tau>0.and.u>0.and.u<tabh_px))return
-      xi=tabh_at(tau,u/tabh_px,3)*wb*u*u
-      if(.not.(xi>0.and.xi<wb))xi=0
-   end function
-
-   ! Slice h of tabh at sqrt|tau| and the second coordinate v in [0,1].
-   pure real(dp) function tabh_at(tau,v,h) result(r)
-      real(dp),intent(in)::tau,v
-      integer,intent(in)::h
-      real(dp)::g,wt(4),ws(4),c(4)
-      integer::i,j
-      r=0
-      g=(sqrt(abs(tau))-tabh_s0)*((tab_n-1)/(tabh_s1-tabh_s0))
-      if(.not.(g>=0.and.g<=tab_n-1))return
+      if(.not.(u>=tabh_u0.and.u<=.99_dp))return
+      h=merge(1,2,tau>0)
+      g=min(sqrt(abs(tau))*((tab_n-1)/tabh_s1),tab_n-1._dp)
       i=min(max(int(g)-1,0),tab_n-4);call lagrange4(g-i,wt)
-      g=v*(tab_n-1)
+      g=(u-tabh_u0)*((tab_n-1)/(1-tabh_u0))
       j=min(max(int(g)-1,0),tab_n-4);call lagrange4(g-j,ws)
-      c=wt(1)*tabh(i+1,j+1:j+4,h)+wt(2)*tabh(i+2,j+1:j+4,h)+wt(3)*tabh(i+3,j+1:j+4,h)+wt(4)*tabh(i+4,j+1:j+4,h)
-      r=(ws(1)*c(1)+ws(2)*c(2))+(ws(3)*c(3)+ws(4)*c(4))
+      cl=wt(1)*tabh(i+1,j+1:j+4,h)+wt(2)*tabh(i+2,j+1:j+4,h)+wt(3)*tabh(i+3,j+1:j+4,h)+wt(4)*tabh(i+4,j+1:j+4,h)
+      r=(ws(1)*cl(1)+ws(2)*cl(2))+(ws(3)*cl(3)+ws(4)*cl(4))
+      l2=(1-rlog(u))**2
+      if(wb>0)then
+         z=wb*wb/l2
+         if(z<1)then
+            call shch(z/2,s,c);l2=l2*2*s*(c-s)          ! 1-exp(-z) without cancellation
+         else
+            l2=l2*(1-exp(-z))
+         endif
+      endif
+      w=sqrt(max(r*(1-u)*l2,0._dp))
+      if(wb>0.and..not.(w<wb))w=0
+      if(.not.(w>0))w=0
    end function
 
    ! Near the parabola, X = k*x**2 (v**2 for an ellipse, -w**2 for a

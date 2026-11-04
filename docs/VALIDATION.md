@@ -424,3 +424,45 @@ Zero-revolution ellipses take one path: geometry → starter → one fixed Gauss
   - Earlier attempts that failed: the `v = pi/2` split on the long way (errors to 1e6), and a matched composite with a correction table (Cardano cancellation deep in the layer).
 - **benchmark_mixed** (final, 3 interleaved runs): zero failures; maximum errors equal or lower in every elliptic class. Overall time is 1.02 of the original (174 against 171 ns); elliptic classes 1.02–1.07. The controlled circular-transfer timing is equal (153 ns), so part of this is code layout between separately built binaries.
 - **Size.** `src/excali_solver.f90` is 1,687 lines, against 1,573 before. The additions are the two table lookups (`table_vp`, `long_d` with `depressed_max`), the 24-point constants, the per-side table scale and the node widening. The removals are the elliptic region dispatch, now unreachable.
+
+## Single path for zero-revolution hyperbolas (2026-11-04)
+
+Every zero-revolution case, elliptic or hyperbolic, now takes the same path: starter, one rectangle, `Q1/Q0`, velocities, with no certificate. The zero-revolution region formulas (`fixed_root`, the `Y`, `X` and `w` kinds) are removed; `general_root` serves multiple revolutions only.
+
+- **Where hyperbolas left the table path before** (logging build, `e290b01`):
+
+  | Set | Hyperbolas to region formulas | Cause |
+  |---|---:|---|
+  | zero_rev (100,000) | 2,091 | 2,010 short-way `tau > 0.9` (off `tabh`); 25 `abs(tau) < 4e-4`; 56 certificate rejections near the parabola (error estimate 4–60 ulp of a tiny `X`) |
+  | adversarial (4,771) | 887 | off the table at `abs(tau) > 0.9` (559) or `abs(tau) < 4e-4` (151), certificate rejections (177) |
+
+  The old `xi` table (`u < 0.1`) was also wrong by up to 4.7 times the singularity distance for short-way transfers within about 0.3 degree of 180 degrees; the certificate caught those.
+- **New hyperbolic table** (`tabh`, 32×32×2, replaces the 32×32×3 one): `u = t/t_p` in `[0.1, 1]`, `sqrt|tau|` in `[0, sqrt(1-1e-6)]`, clamped beyond. Short way `w^2/((1-u) wn^2)` with `wn^2 = L^2 (1 - exp(-wb^2/L^2))`, `L = 1 - log u`; long way `w^2/((1-u) L^2)`. Starter error at most 6.3e-4 of the singularity bound for `tau` from 1e-16 to 1 - 1e-9 (the rational blend `wb^2 L^2/(wb^2 + L^2)` reaches 1.3% near `tau = 4e-5`, because `wb ~ log(1/tau)`). These hyperbolas use 3 nodes at bound/256.
+- **Closed form for `u < 0.1`.** `T = sqrt2 c sqrt(y)/E`, `E = e^w`, `c = y0 + b`, `y = c - bE/2` (the large-`w` estimate the region formula used to centre its interval). Measured starter error, relative to the singularity bound:
+
+  | Branch | Coordinate | Worst error |
+  |---|---|---:|
+  | long way | `w = log E` | 1.1e-2 (at `u = 0.1`; 2.3e-4 at `u = 0.01`) |
+  | short way, `y >= y0/2` | `w = log E` | 1.1e-2 |
+  | short way, `y < y0/2` | `xi` from `y = (tE/(sqrt2 c))^2` via `cosh w = (c-y)/b` | 1.1e-2 |
+
+  These use 8 nodes at bound/8.
+- **Bugs found on the way:**
+  - The short-way bound `min(2w, wb-w)` had no cap. At large `w`, `T ~ exp(-w)` has near-copies of the root at `w ± 2 pi i`, and the half-width could exceed 1, past the node tables (`kr < 0`). The bound is now `min(2w, wb-w, pi)`, matching the long way's `min(w, pi)`.
+  - `xi ~ t^2` reaches half-widths below `2^-62` (the node tables' range) at `t/t_p ~ 1e-9`; `rect_ratio` now uses `cos = cosh = 1`, `sin = sinh = L u/2` there, exact to rounding.
+- **Rejected:** the `Y = sqrt(y)` coordinate for the short-way closed form. It is accurate (no other zero within 0.98 of `sqrt(y(pi)) - Y`, checked by the argument principle for `tau` from 1e-8 to 1), but needs an `asinh` per node: the fast-hyperbola category took 598 ns against 234. `xi` for every short-way closed form fails where `xi` is large: `sinh w` by angle addition cancels from about `1e20` (errors up to 179 in the stress set).
+- **Truth sets** (119,531 cases): failure counts equal or lower in every category, maximum errors equal within rounding (largest change 1.74e-12 → 1.90e-12 in zero_rev category 2); per case, none more than 4 times worse above 1e-13, two better.
+- **Stress sets** (quad-precision Kepler judge): the 40,000-case zero-revolution set and a new 100,000-case hyperbolic set (`t/t_p` from 1e-9 to 1, `r2/r1` from 1e-3 to 1, transfer angles clustered within 1e-12 of 0, 180 and 360 degrees): 0 failures, no velocity differing from the previous version by more than 1e-10.
+- **Tests.** Lamberts-Comparison CTest 9/9 (Release, Debug), standalone 3/3.
+- **Speed** (one thread):
+
+  | Measure | Previous | Now |
+  |---|---:|---:|
+  | `excali_batch`, adversarial set | 404–414 ns | 259–262 ns |
+  | `excali_batch`, zero_rev set | 152–155 ns | 140–143 ns |
+  | `excali_batch`, multirev / harness_mixed | 170 / 123–125 ns | 170 / 124–128 ns |
+  | single solves, adversarial hyperbolic categories 11–14, 18 | 356–483 ns | 182–225 ns |
+  | single solves, fastest hyperbolas (category 15) | 234 ns | 265 ns |
+  | benchmark_mixed, every class | — | within run-to-run spread of the previous version |
+
+- **Size.** `src/excali_solver.f90` is 1,608 lines (1,687 before): `fixed_root`, `xlow`, three `zeval` kinds, `table_xi`, `tabh_at` and the `yy` velocity path are gone; the closed form adds 22 lines.
