@@ -484,21 +484,17 @@ contains
    real(dp),optional,intent(in) :: pnormal(3)
    type(frame) :: gc(nb)
    real(dp) :: xc(nb),cc(nb),hsc(nb),hcc(nb),wbc(nb),lbc(nb),ubc(nb),ddc(nb),dec(nb),elc,vsc,chord,semi
-   integer :: kc(nb),kd(nb),krc(nb),j
-   real(dp) :: dtc(nb),tauc(nb)
+   integer :: kc(nb),kd(nb),krc(nb),accc(nb),j
    logical :: fast(nb),scc(nb),nearc(nb),trig(nb),eightc(nb)
-   ! Stage 1: geometry and the table coordinates (multiple revolutions: the
-   ! tables themselves).
+   ! Stage 1: geometry; the multi-revolution tables.
    do j=1,nc
       fast(j)=.false.;nearc(j)=.false.;halfc(j)=0;statc(j)=-1
       if(abs(dirc(j))/=1.or.nrev(j)<0.or.abs(branch(j))/=1.or..not.(tofc(j)>0) &
          .or..not.ieee_is_finite(tofc(j)))cycle
       call geometry(r1c(:,j),r2c(:,j),tofc(j),dirc(j),gc(j),statc(j),halfc(j),pnormal)
       if(statc(j)/=-4)cycle
-      lbc(j)=0;ubc(j)=pi;fast(j)=.true.
-      if(nrev(j)==0)then
-         call table_coordinates(gc(j),kc(j),cc(j),ddc(j),wbc(j),nearc(j),dtc(j))
-      else
+      lbc(j)=0;ubc(j)=pi;accc(j)=0
+      if(nrev(j)>0)then
          ! Every ellipse through both points has a>=s/2, so T > m*2*pi*(s/2)**1.5
          ! (within 31% of the minimum time) rejects most infeasible times.
          chord=sqrt((gc(j)%rn1-gc(j)%rn2)**2+4*gc(j)%rn1*gc(j)%rn2*gc(j)%ss**2);semi=(gc(j)%rn1+gc(j)%rn2+chord)/2
@@ -517,28 +513,17 @@ contains
          endif
       endif
    enddo
-   ! Stage 2: zero-revolution table starters, then the rectangle's
-   ! coordinate and width.
+   ! Stage 2: the zero-revolution region selector (its own loop: inside the
+   ! geometry loop it costs 5-10 ns per solve in code generation), then the
+   ! rectangle's coordinate, centre and half-width.
    do j=1,nc
       if(statc(j)/=-4.or.nrev(j)>0)cycle
-      call table_root(kc(j),cc(j),ddc(j),wbc(j),nearc(j),dtc(j),xc(j))
-      tauc(j)=merge(abs(cc(j)),1._dp,.not.nearc(j))
-      if(kc(j)>0.and.wbc(j)>0)tauc(j)=0          ! short-way table: 3 nodes
-      if(kc(j)>0.and.(wbc(j)>2.or.cc(j)>1-1e-6_dp))tauc(j)=2   ! closed-form or clamped: R/4
+      call zero_rev_start(gc(j),kc(j),xc(j),wbc(j),accc(j),nearc(j))
       fast(j)=xc(j)>0.or.kc(j)==0
    enddo
    do j=1,nc
       if(.not.fast(j).or.kc(j)==0)cycle
-      call fast_coordinate(kc(j),xc(j),nrev(j),gc(j)%b,wbc(j),lbc(j),ubc(j),kd(j),cc(j),elc,eightc(j),hsc(j),hcc(j))
-      ! Ellipses at |tau|>=0.75 or from the near-parabolic series: 8 nodes, R/8;
-      ! the long-way closed form (within 6.4%) and tau>1-1e-6: 8 nodes, R/4.
-      if(nrev(j)==0.and.kd(j)>0.and.tauc(j)>=.75_dp)then
-         elc=elc*merge(64,32,tauc(j)>1.5_dp);eightc(j)=.true.
-      endif
-      ! Hyperbolic closed form (within 1.1%): 8 nodes, R/8.
-      if(nrev(j)==0.and.kd(j)<0.and.tauc(j)>1.5_dp)then
-         elc=elc*32;eightc(j)=.true.
-      endif
+      call fast_coordinate(kc(j),xc(j),nrev(j),gc(j)%b,wbc(j),lbc(j),ubc(j),accc(j),kd(j),cc(j),elc,eightc(j),hsc(j),hcc(j))
       fast(j)=elc>0;krc(j)=kexp(elc)
    enddo
    ! Stage 3: one rectangle each, then its acceptance.
@@ -633,22 +618,34 @@ contains
          status=-4
       end subroutine
 
-      ! Zero-revolution starter in two steps. table_coordinates: k=0 for a
-      ! parabola; k=1 (ellipse) or -1 (hyperbola, with the short-way branch
-      ! point wb), the Lancaster-Blanchard tau and the table coordinate u
-      ! ((tp/t)**(1/3) or t/tp), or within 3.1% of the parabolic time (near) the
-      ! second-order series reversion X in u, or for hyperbolas at t/tp<0.1
-      ! the closed-form root itself (tau=2). table_root: the root x in
-      ! coordinate k (2: pi-v near the upper pole; -2: xi=wb-w near the
-      ! short-way branch point).
-      pure subroutine table_coordinates(g,k,tau,u,wb,near,dt)
+      ! Zero-revolution region selector: the coordinate k, the starter x in it
+      ! and the starter's accuracy class acc, which fixes the rectangle before
+      ! it is evaluated (fast_coordinate). wb is the short-way branch point;
+      ! near marks the near-parabolic window (velocities use Lagrange f,g).
+      !
+      !   region                         k      starter                     acc
+      !   parabola                       0      x = 0                        -
+      !   |t-tp| <= 3.1% tp (near)       +-1    series reversion in X        X
+      !   ellipse, |tau| < 0.75          1, 2   table_v (tab)                0
+      !   ellipse, -0.9 <= tau < -0.75   1, 2   table_v (tab)                1
+      !   ellipse, tau >= 0.75           1, 2   table_vp (tabp)              0
+      !     tau > 1-1e-6                        tabp clamped                 2
+      !   ellipse, tau < -0.9            1, 2   long_d (closed form)         2
+      !   hyperbola, t/tp >= 0.1         -1     table_w (tabh)               0
+      !   hyperbola, t/tp < 0.1          -1,-2  large-w closed form          1
+      !
+      ! acc 0: within 0.2% of the singularity bound R, 3 nodes at R/256;
+      ! acc 1: within 4% (1.1% for hyperbolas), 8 nodes at R/8; acc 2: within
+      ! 6.4%, 8 nodes at R/4; X: 8 nodes at |X|/8 (or less). k=2 is pi-v
+      ! (used when v > 3pi/4, or d < pi/4 from long_d); k=-2 is xi=wb-w.
+      pure subroutine zero_rev_start(g,k,x,wb,acc,near)
          type(frame),intent(in)::g
-         integer,intent(out)::k
-         real(dp),intent(out)::tau,u,wb,dt
+         integer,intent(out)::k,acc
+         real(dp),intent(out)::x,wb
          logical,intent(out)::near
-         real(dp)::tp,dc,sl,sw,r0,r1
+         real(dp)::tp,u,tau,dc,sl,sw,r0,r1,dt
          tp=sqrt(g%y0)*(g%y0*sqrt2/3+g%a)
-         tau=0;u=0;wb=0;k=0;near=.false.;dt=0
+         k=0;x=0;wb=0;acc=0;near=.false.
          if(abs(g%t-tp)<=4*epsilon(tp)*tp)return    ! parabola
          near=abs(g%t-tp)<=.031_dp*tp      ! meets the table at phi=0.99
          k=1;u=rcbrt(tp/g%t)
@@ -661,88 +658,75 @@ contains
          endif
          if(near)then
             u=near_parabola_x(g%y0,g%a,g%b,g%t,tp)
-         elseif(k<0.and.u<tabh_u0)then
+            if(u*k>0)x=sqrt(abs(u))
+            acc=1
+            return
+         endif
+         if(k<0.and.u<tabh_u0)then
             ! Hyperbola, t/tp<0.1: large-w closed form T = sqrt2*c*sqrt(y)/E,
             ! E=exp(w), c=y0+b, y=c-b*E/2, a quadratic in E (rationalized on the
             ! short way): w=log(E), or on the short way with y=(t*E/(sqrt2*c))**2
             ! < y0/2 (xi < log 2) xi=wb-w (k=-2) from y, exactly and without
-            ! cancellation (cosh(w)=(c-y)/b). Within 1.1% of the singularity
-            ! distance for every tau. tau=2 marks the closed form.
+            ! cancellation (cosh(w)=(c-y)/b). Within 1.1% of the bound for every tau.
             sw=g%y0+g%b;dc=sqrt((sw*sw*g%b)**2+8*g%t*g%t*sw**3)
             if(g%b>=0)then
                dc=4*sw**3/(sw*sw*g%b+dc)
             else
                dc=(dc-sw*sw*g%b)/(2*g%t*g%t)
             endif
-            tau=2;u=log(dc)
+            x=log(dc);acc=1
             if(g%b>0)then
                sl=(g%t*dc/(sqrt2*sw))**2                  ! y
                if(sl<g%y0/2)then
                   r0=sqrt(g%y0*g%ypi);r1=sqrt((g%y0-sl)*(g%ypi-sl))
-                  k=-2;u=log1p_c((sl+sl*(2*sw-sl)/(r0+r1))/(sw-sl+r1))
+                  k=-2;x=log1p_c((sl+sl*(2*sw-sl)/(r0+r1))/(sw-sl+r1))
                else
-                  u=min(u,.99_dp*wb)
+                  x=min(x,.99_dp*wb)
                endif
             endif
-         else
-            dc=sqrt(g%q*g%q*(g%s1+g%s2)**2+4*g%p*g%p*g%ss*g%ss);sl=(g%rn1+g%rn2+dc)/2   ! chord, semiperimeter
-            tau=g%a/(sqrt2*sl)/(1+sqrt(dc/sl))
-            if(k>0.and.tau>=.75_dp)then
-               ! Short-way table tabp (table_vp), split at Th=T(pi/2): s1=(Th/t)**(1/3)
-               ! with scale (K/Th)**(1/3) (wb=1), or s2=(t-tp)/(Th-tp) with scale
-               ! s2*(s2+2*tp/(Th-tp)) (wb=2).
-               sw=g%y0+g%b
-               sw=sqrt(sw)*(sw*(pi/(2*sqrt2))+g%a)          ! Th
-               if(g%t>=sw)then
-                  wb=1;u=rcbrt(sw/g%t);dt=rcbrt(pi*g%ypi*sqrt(g%ypi)/(sqrt2*sw))
-               else
-                  wb=2;u=(g%t-tp)/(sw-tp);dt=u*(u+2*tp/(sw-tp))
-               endif
-            elseif(k>0.and.tau<-.9_dp)then
-               ! Long way toward tau -> -1 (long_d): th=t/|b|**1.5, eta**2=2*yend/|b|.
-               wb=3;u=g%t/((-g%b)*sqrt(-g%b));dt=sqrt(2*g%yend/(-g%b))
-            elseif(k>0)then
-               ! Elliptic table scale (table_v): (K/tp)**(1/3), K=pi*y(pi)**1.5/sqrt2,
-               ! for phi<=1/2, else (t-tp)/T0', T0'=dT/d(v**2) at the parabola.
-               if(u<=.5_dp)then
-                  dt=rcbrt(pi*g%ypi*sqrt(g%ypi)/(sqrt2*tp))
-               else
-                  sw=sqrt(g%y0)
-                  dt=(g%t-tp)/(sw*(g%y0*(rsqrt2/5)+g%b*(rsqrt2/2))+g%a*g%b/(4*sw))
-               endif
-            endif
+            return
          endif
-      end subroutine
-
-      pure subroutine table_root(k,tau,u,wb,near,dt,x)
-         integer,intent(inout)::k
-         real(dp),intent(in)::tau,u,wb,dt
-         logical,intent(in)::near
-         real(dp),intent(out)::x
-         x=0
-         if(k==0)return
-         if(near)then
-            if(u*k>0)x=sqrt(abs(u))
-         elseif(k>0.and.wb>2)then
-            x=long_d(u,dt)                      ! pi-v
+         dc=sqrt(g%q*g%q*(g%s1+g%s2)**2+4*g%p*g%p*g%ss*g%ss);sl=(g%rn1+g%rn2+dc)/2   ! chord, semiperimeter
+         tau=g%a/(sqrt2*sl)/(1+sqrt(dc/sl))       ! Lancaster-Blanchard lam/(1+sqrt(1-lam**2))
+         if(k<0)then
+            x=table_w(tau,u,wb)
+            return
+         endif
+         if(tau>=.75_dp)then
+            ! Short-way table tabp, split at Th=T(pi/2): s1=(Th/t)**(1/3) with
+            ! scale (K/Th)**(1/3) (side 1), or s2=(t-tp)/(Th-tp) with scale
+            ! s2*(s2+2*tp/(Th-tp)) (side 2).
+            sw=g%y0+g%b
+            sw=sqrt(sw)*(sw*(pi/(2*sqrt2))+g%a)          ! Th
+            if(g%t>=sw)then
+               u=rcbrt(sw/g%t);x=table_vp(tau,u,rcbrt(pi*g%ypi*sqrt(g%ypi)/(sqrt2*sw)),1)
+            else
+               u=(g%t-tp)/(sw-tp);x=table_vp(tau,u,u*(u+2*tp/(sw-tp)),2)
+            endif
+            if(tau>1-1e-6_dp)acc=2
+         elseif(tau<-.9_dp)then
+            ! Long way toward tau -> -1: th=t/|b|**1.5, eta**2=2*yend/|b|; d=pi-v.
+            x=long_d(g%t/((-g%b)*sqrt(-g%b)),sqrt(2*g%yend/(-g%b)));acc=2
             if(x>.25_dp*pi)then
                x=pi-x
             else
                k=2
             endif
-         elseif(k>0)then
-            if(wb>0)then
-               x=table_vp(tau,u,dt,nint(wb))
-            else
-               x=table_v(tau,u,dt)
-            endif
-            if(x>.75_dp*pi)then
-               x=pi-x;k=2
-            endif
-         elseif(tau>1.5_dp)then
-            x=u                                 ! hyperbolic closed form: w, or xi (k=-2)
+            return
          else
-            x=table_w(tau,u,wb)
+            ! Elliptic table: scale (K/tp)**(1/3), K=pi*y(pi)**1.5/sqrt2, for
+            ! s<=1/2, else (t-tp)/T0', T0'=dT/d(v**2) at the parabola.
+            if(u<=.5_dp)then
+               dt=rcbrt(pi*g%ypi*sqrt(g%ypi)/(sqrt2*tp))
+            else
+               sw=sqrt(g%y0)
+               dt=(g%t-tp)/(sw*(g%y0*(rsqrt2/5)+g%b*(rsqrt2/2))+g%a*g%b/(4*sw))
+            endif
+            x=table_v(tau,u,dt)
+            if(abs(tau)>=.75_dp)acc=1
+         endif
+         if(x>.75_dp*pi)then
+            x=pi-x;k=2
          endif
       end subroutine
 
@@ -750,41 +734,50 @@ contains
       ! rectangle. Every singularity of 1/(T-t) lies at least R from the root:
       ! min(v,pi-v) for ellipses (sqrt(y) branch points, mirror root, pole),
       ! min(w,pi) or min(2w,wb-w,pi) for hyperbolas in w, min(xi,2w,pi) in
-      ! xi=wb-w, |X| near the parabola, the bracket [lo,hi] for m>0. kexp rounds
-      ! el down to a power of two (el<=1 keeps the node tables in range).
-      ! Zero revolutions: 3 nodes at R/256 (solve_chunk widens the closed
-      ! forms and the ellipses at |tau|>=0.75 to 8 nodes at R/8 or R/4), X 8
-      ! nodes at |X|/8; multiple revolutions 8 nodes at R/16.
-      pure subroutine fast_coordinate(k,x,m,b,wb,lo,hi,kind1,c,el,eight,hs,hc)
-         integer,intent(in)::k,m
+      ! xi=wb-w, |X| near the parabola, the bracket [lo,hi] for m>0. el is
+      ! R/256 (3 nodes), R/8 or R/4 (8 nodes) by the zero-revolution accuracy
+      ! class acc; X 8 nodes at |X|/8 (or less); multiple revolutions 8 nodes
+      ! at R/16. kexp rounds el down to a power of two (el<=1 keeps the node
+      ! tables in range).
+      pure subroutine fast_coordinate(k,x,m,b,wb,lo,hi,acc,kind1,c,el,eight,hs,hc)
+         integer,intent(in)::k,m,acc
          real(dp),intent(in)::x,b,wb,lo,hi
          integer,intent(out)::kind1
          real(dp),intent(out)::c,el,hs,hc
          logical,intent(out)::eight
          hs=0;hc=1;kind1=k;c=x;eight=.true.
          if(m>0)then
-            el=min(c-lo,hi-c)
+            el=min(c-lo,hi-c)/16
             call sincos_half(c,hs,hc)
+            return
          elseif(abs(k)==1.and.x<.3_dp)then
             kind1=0;c=k*x*x
             el=min(abs(c),.2_dp-abs(c))
             if(k>0)el=min(2*abs(c),.2_dp-abs(c))
             if(k<0.and.b>0)el=min(el,wb*wb-abs(c))
+            el=el/16
+            return
          elseif(k>0)then
-            el=min(c,pi-c)/16;eight=.false.  ! k=2: x is already pi-v
+            el=min(c,pi-c)                   ! k=2: x is already pi-v
             call sincos_half(c,hs,hc)
          elseif(k==-2)then
-            el=min(c,2*(wb-c),pi)/16;eight=.false.   ! xi: branch point, mirror root, w=+-i*pi
+            el=min(c,2*(wb-c),pi)            ! xi: branch point, mirror root, w=+-i*pi
             call shch(c/2,hs,hc)
          else
             ! w: mirror root -w (short way) or w=+-i*pi, the branch point wb, and
             ! at large w the near-copies of the root at w+-2*pi*i (T ~ exp(-w)).
             el=min(c,pi)
             if(b>0)el=min(2*c,wb-c,pi)
-            el=el/16;eight=.false.
             call shch(c/2,hs,hc)
          endif
-         el=el/16
+         select case(acc)
+          case(0)
+            el=el/256;eight=.false.
+          case(1)
+            el=el/8
+          case default
+            el=el/4
+         end select
       end subroutine
 
       ! Accept the rectangle and move the root and its half-angle functions to
@@ -1317,7 +1310,7 @@ contains
 
    ! Short-way elliptic root v from tabp at tau in [0.75,1-1e-6] (grid uniform in
    ! 1-sqrt(1-tau)) and s in [0,1]: side 1 (t>=T(pi/2)) v=pi-s*sc*A, side 2
-   ! v=sqrt(B*sc) (sc from table_coordinates). 0 outside the table.
+   ! v=sqrt(B*sc) (sc from zero_rev_start). 0 outside the table.
    pure real(dp) function table_vp(tau,s,sc,side) result(v)
       real(dp),intent(in)::tau,s,sc
       integer,intent(in)::side

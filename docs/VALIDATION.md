@@ -466,3 +466,17 @@ Every zero-revolution case, elliptic or hyperbolic, now takes the same path: sta
   | benchmark_mixed, every class | — | within run-to-run spread of the previous version |
 
 - **Size.** `src/excali_solver.f90` is 1,608 lines (1,687 before): `fixed_root`, `xlow`, three `zeval` kinds, `table_xi`, `tabh_at` and the `yy` velocity path are gone; the closed form adds 22 lines.
+
+## One region selector for zero revolutions (2026-11-04)
+
+`zero_rev_start` replaces `table_coordinates`, `table_root` and the node-widening rules in `solve_chunk`. It returns the coordinate, the starter and an accuracy class (0: 3 nodes at bound/256; 1: 8 nodes at bound/8; 2: 8 nodes at bound/4), and `fast_coordinate` alone turns the class into the rectangle. Every zero-revolution region, its starter and its rectangle are listed in one comment table (and in the README).
+
+- **Results identical** in 119,526 of 119,531 truth cases (bit for bit). The other 5 (adversarial categories 11 and 14) are near-parabolic hyperbolas with `w` just above 0.3. They now get the 8-node rectangle the series starter is meant to have; before, they fell through to 3 nodes at bound/256. Both versions are at rounding (2e-15 to 2e-14).
+- **Stress sets** (40,000 zero-revolution, 100,000 hyperbolic): 0 failures, no velocity differing from the previous version by more than 1e-10. Tests: CTest 9/9 (Release, Debug), standalone 3/3.
+- **Code generation.** Calling the selector inside the geometry loop cost 8–13 ns per solve. A separate loop costs nothing measurable. Splitting the hyperbolic closed form into its own routine, a module-level selector, or arithmetic widths instead of `select case` changed nothing.
+- **Speed** (best of 3–15 interleaved runs, against the previous commit):
+  - `excali_batch`: equal or faster on every set (zero_rev 139 → 137 ns, adversarial 256 → 248, multirev 169 → 168).
+  - Single solves: equal or 1–8% faster in every truth category.
+  - Circular-transfer microbenchmark: best 152 → 157 ns, mean 158 → 162, within this machine's run-to-run spread (the same binary measured 152–166).
+  - benchmark_mixed: every class within 1 ns of the previous version, same maximum errors.
+- **Size.** `src/excali_solver.f90`: 1,601 lines (1,608).
