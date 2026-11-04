@@ -302,3 +302,59 @@ Coarser options measured (single-thread A/B against the previous tables on the s
 8-node rectangles of half-width 1/8 of the bound everywhere, so that a coarser starter still finishes in one rectangle, were not faster. With the shipped tables the one-rectangle path finishes 99.4–100% of each mixed class (20,000 cases each), as before; about 1% of zero-revolution elliptic cases with `v >= 0.3` now miss the 3-node window and take the general path.
 
 **Checks:** identical statuses to the previous tables on the 220,000-case mixed set and the 1,000,009-case hard mixed dataset (scalar and batch), with solutions within 8e-13 of each other; the same 12 hard-set cases fail with both.
+
+## No Halley search: fixed-node multi-revolution formulas (2026-11-03)
+
+The Halley search for the multi-revolution minimum time was removed. Where the tables do not decide (within the 1e-6 margin of `t_min`, outside their `tau` range, or a rejected rectangle), two fixed 32-node zero-height ratios run instead: one for the minimum location `v*`, as the zero of `T'(v) sin^4 v`, and one for the branch, in `rho = sign(v-v*) sqrt(1-(t_min/T)^(1/3))`. Both use `[0, pi]`, or a scale-aware interval around an asymptotic estimate when `|b/(y0+b)| > 0.95`. The method and the experiments behind it are in Lamberts-Comparison `research/closed-form/`.
+
+- **Path counts.** On the 126,531 truth cases of Lamberts-Comparison `research/negrete-reports/data` (all multi-revolution, near-`t_min`, high-`n`, infeasible and adversarial sets), the Halley code is never reached once the asymptotic interval is used. On a 24,000-case stress set (transfer angles down to 1e-12 from 0 and 2 pi, radius ratios to 0.01, m = 1 to 1000, times from 1e-12 above `t_min` to 100 times it, plus infeasible times), the certificate never failed. The 780 adversarial near-`t_min` cases are now solved with no bracketed contour; it took 400 of them before.
+- **Accuracy.** Near-`t_min` adversarial cases: 172 above 1e-10 (195 before), worst 1.1e-8 (2.6e-8 before); these are at the conditioning floor. All other categories are unchanged. On the stress set, the previous version failed 12 cases (status -4) and the new one none. Where velocities differed by more than 1e-8 (578 cases), quad-precision Kepler propagation put the new answer 10x closer to `r2` in 155 cases and the old one in 17; the worst arrival errors are 2.9e-9 and 8.4e-9.
+- **Tests.** Lamberts-Comparison CTest 9/9 (Release and Debug, including the 32,400 feasibility decisions), standalone 3/3.
+- **benchmark_mixed** (2,000 cases per class, M1 Pro, two interleaved runs): zero failures in every class. Overall 0.87-0.88 of ivLam before and after. Multi-revolution classes take 1-2% longer, within run-to-run noise. Maximum errors are equal in 8 classes, lower in `multirev_1` (5.1e-13 vs 5.8e-13) and `multirev_long` (8.2e-13 vs 9.0e-13), and higher in `multirev_2_3` (2.0e-13 vs 1.0e-13).
+- **Cost.** The adversarial near-`t_min` class takes 864 ns per solve against 365 ns with Halley: 32 time evaluations for `v*` cost more than one or two Halley steps. Without the multi-revolution tables, every multi-revolution solve would take this path (1,159 ns against 204 ns on random cases), so the tables stay.
+- **Still not iteration-free.** Zero-revolution starter misses at `b/(y0+b) -> 1` (near-parabolic orbits, very small transfer angles) and very short hyperbolas still use the bracketed contour. One stress case of multi-revolution branches far from `t_min` at `|b/(y0+b)| > 0.95` reached it too.
+- **Size.** `src/excali_solver.f90` grew from 1,773 to 1,939 lines.
+
+## General path replaced by fixed formulas (2026-11-04)
+
+The general path is replaced by fixed formulas. These are deleted:
+- the closed-form zero-revolution starters;
+- the 5-pass stage control (`rect_root`, `canonical`, `reach`, `contour_root`, `pole_coordinate`);
+- both bracketed contours (`converge` in the anomaly, `converge_y` in `sqrt(y)`) with `ytime` and `xof`;
+- the multi-revolution branch starter (`branch_start`) and the helpers only they used (`hermite`, `rasinh`, `rasin`, `qlog`).
+
+Every case the tables do not settle now goes to one fixed 32-point zero-height ratio chosen by region (README, General path). `src/excali_solver.f90` went from 1,773 lines (before 2026-11-03) and 1,939 (after the Halley removal) to 1,573.
+
+- **Fallback population.** The 720 zero-revolution cases of the truth sets that previously reached a bracketed contour are all solved by the fixed formulas:
+  - 715 short-way: near-parabolic orbits, `b/(y0+b) -> 1`, near-collinear, very short hyperbolas, in `Y = sqrt(y)`;
+  - 5 long-way at `b/(y0+b) ~ -0.99997`, in `zeta`.
+- **Truth sets** (126,531 cases, Lamberts-Comparison `research/negrete-reports/data`): no hard failures. Every category has the same or fewer failures above 1e-10 than the original:
+
+  | Category | Original (fails above 1e-10 / max error) | Fixed formulas |
+  |---|---|---|
+  | near-parabolic orbits | 6 / 1.0e-8 | 5 / 6.1e-10 |
+  | adversarial `lambda -> +1` | 3 / 1.8e-9 | 0 / 5.8e-11 |
+  | adversarial near-collinear | 243 / 5.4e-4 | 240 / 1.3e-6 |
+  | adversarial near-`t_min` | 195 / 2.6e-8 | 172 / 1.1e-8 |
+
+  The other categories are equal within rounding; the largest change is 6.1e-14 against 2.8e-14 in one dev class.
+- **Zero-revolution stress set** (40,000 cases: transfer angles within 1e-12 of 0, pi and 2 pi, radius ratios to 0.01, both directions, `t/t_p` from 1e-6 to 1e9):
+  - 0 failures (the original: 1).
+  - Where velocities differ by more than 1e-10 (527 cases), quad-precision Kepler propagation puts the new answer 10x closer to `r2` in all 527.
+  - At `t/t_p > 1e5` both versions have the same, input-limited, arrival error.
+- **Multi-revolution stress set** (24,000 cases): 0 failures (the original: 12).
+- **Tests.** Lamberts-Comparison CTest 9/9 (Release and Debug), standalone 3/3.
+- **benchmark_mixed** (2,000 per class, two interleaved runs): zero failures. Overall 0.86-0.88 of ivLam against 0.86 before, within run-to-run noise. Maximum errors are equal in 8 classes and lower in `multirev_1` and `multirev_long`; `multirev_2_3` is 2.0e-13 against 1.0e-13.
+- **Cost.** A case on the general path now evaluates `T` at 32 nodes, plus at most 6 more for the region choice and the `zeta` piece selection.
+  - Random truth classes (where the tables decide almost everything): 3-5% slower.
+  - Hard categories, which mostly take the general path:
+
+    | Category | Before | After |
+    |---|---:|---:|
+    | near-parabolic orbits | 262 ns | 540 ns |
+    | `lambda -> +1` | 361 ns | 755 ns |
+    | `lambda -> -1` | 211 ns | 1,192 ns |
+    | near-collinear | 578 ns | 883 ns |
+    | near-`t_min` | 390 ns | 868 ns |
+
+    These are single runs, M1 Pro under load.

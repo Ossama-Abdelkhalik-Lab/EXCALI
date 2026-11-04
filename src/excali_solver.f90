@@ -18,7 +18,6 @@ module excali_solver
    ! binary64; on any other real format they use the standard intrinsics.
    logical,parameter  :: ieee64=radix(1._dp)==2.and.digits(1._dp)==53.and. &
       maxexponent(1._dp)==1024.and.minexponent(1._dp)==-1021.and.bit_size(0_int64)==64
-   integer,parameter  :: max_steps=120
    integer,parameter  :: nb=32          ! excali_batch chunk size
    ! Thin-rectangle quadrature in its zero-height limit. On [c-L,c+L],
    ! L=2**(-kr), with f=1/(T-t) real, Gauss-Legendre nodes x and weights w:
@@ -51,6 +50,21 @@ module excali_solver
    real(dp),protected :: sh3f(5,0:kmax)=reshape([((sinh(.5_dp**(k_+1)*u3(j_)),j_=1,5),k_=0,kmax)],[5,kmax+1])
    ! Reciprocal factorials 1/j! (constant multiplies, not divisions).
    real(dp),parameter :: rf(16)=[(1/gamma(j_+1._dp),j_=1,16)]
+   ! Fixed 32-point Gauss-Legendre rule on the whole multi-revolution domain
+   ! v in [0,pi] (no starter): nodes gv, weights gw times the half-width pi/2,
+   ! and sin/cos of gv/2. Positive half of the standard nodes on [-1,1].
+   integer,parameter  :: ng=32,hg=ng/2
+   real(dp),parameter :: ggx(hg)=[0.04830766568773832_dp,0.1444719615827965_dp,0.23928736225213706_dp, &
+      0.33186860228212767_dp,0.42135127613063533_dp,0.5068999089322294_dp,0.5877157572407623_dp, &
+      0.6630442669302152_dp,0.7321821187402897_dp,0.7944837959679424_dp,0.84936761373257_dp, &
+      0.8963211557660521_dp,0.9349060759377397_dp,0.9647622555875064_dp,0.9856115115452683_dp,0.9972638618494816_dp]
+   real(dp),parameter :: ggw(hg)=[0.09654008851472758_dp,0.0956387200792746_dp,0.09384439908080439_dp, &
+      0.09117387869576371_dp,0.08765209300440369_dp,0.08331192422694662_dp,0.07819389578707012_dp, &
+      0.0723457941088482_dp,0.0658222227763616_dp,0.05868409347853546_dp,0.05099805926237596_dp, &
+      0.042835898022226926_dp,0.03427386291302163_dp,0.02539206530926273_dp,0.016274394730906486_dp,0.007018610009470362_dp]
+   real(dp),parameter :: gvp(ng)=[(pi/2*(1+ggx(j_)),j_=1,hg),(pi/2*(1-ggx(j_)),j_=1,hg)]
+   real(dp),protected :: gv(ng)=gvp,gw(ng)=[ggw*(pi/2),ggw*(pi/2)]
+   real(dp),protected :: gsv(ng)=sin(gvp/2),gcv(ng)=cos(gvp/2)
    ! (1-cos(v))/X in X=v**2 (highest first), for the near-parabolic coordinate.
    real(dp),parameter :: cser(9)=[1._dp/6402373705728000._dp,-1._dp/20922789888000._dp,1._dp/87178291200._dp, &
       -1._dp/479001600._dp,1._dp/3628800._dp,-1._dp/40320._dp,1._dp/720._dp,-1._dp/24._dp,.5_dp]
@@ -121,596 +135,417 @@ contains
    v1=w1(:,1);v2=w2(:,1);status=st(1);half=hf(1)
    end subroutine excali_one
 
-   ! General path (no tables): closed-form starters, the minimum-time
-   ! search for multiple revolutions, zero-height rectangles in one or two
-   ! stages and the bracketed contour for rare starter misses. Returns the
-   ! root in coordinate k (or Y=sqrt(y) in yy for the shortest hyperbolas),
-   ! with its half-angle functions when trig. status 0/1 on success.
+   ! General path (no tables, or a table rectangle not certified): every case
+   ! goes to exactly one fixed 32-node zero-height ratio, chosen by region,
+   ! with no starter, retry or iteration (Lamberts-Comparison research/
+   ! closed-form). Returns the root in coordinate k with its half-angle
+   ! functions (or Y=sqrt(y) in yy). status 0/1 on success, 5 below the
+   ! minimum time, -4 when a certificate fails.
    subroutine general_root(g,m,br,k,x,hs,hc,trig,yy,status)
    type(frame),intent(in) :: g
    integer,intent(in)     :: m,br
    integer,intent(out)    :: k,status
    real(dp),intent(out)   :: x,hs,hc,yy
    logical,intent(out)    :: trig
-   real(dp) :: rn1,rn2,ss,a,b,y0,yend,ypi,t,tp,tv2,lo,hi,phi,sig,tmin,d(0:3),f(0:3), &
-               k0,kpi,c,dc,p,wb,psi,sw,dt
-   logical :: merged
+   real(dp) :: rn1,rn2,ss,a,b,y0,yend,ypi,t,tp,lo,hi,tmin,d(0:3),c,dc,tref,s3,s0
    rn1=g%rn1;rn2=g%rn2;ss=g%ss;a=g%a;b=g%b;y0=g%y0;yend=g%yend;ypi=g%ypi;t=g%t
-   merged=.false.;trig=.false.;status=-4;x=0;hs=0;hc=1
-
-   !======= Starters and admissible interval =======
-   k=1;lo=0;hi=pi;yy=-1
+   trig=.false.;status=-4;x=0;hs=0;hc=1;k=1;yy=-1;s0=0
    if(m==0)then
       tp=sqrt(y0)*(y0*sqrt2/3+a)                                 ! parabolic time
-      tv2=y0*sqrt(y0)*(rsqrt2/5)+b*(sqrt(y0)*rsqrt2+a/(2*sqrt(y0)))/2 ! dT/d(v**2) at 0
       if(abs(t-tp)<=4*epsilon(t)*tp)then
-         x=0                                                     ! parabola
-      elseif(t>tp)then
-         phi=rcbrt(tp/t)
-         ! Ellipse: cubic Hermite for v**2 in phi=(tp/t)**(1/3), between
-         ! v**2=(t-tp)/tv2 at phi=1 and pi-v=phi*(K/tp)**(1/3) at phi=0,
-         ! with the exact upper pole T ~ pi*y(pi)**1.5/(sqrt2*(pi-v)**3).
-         x=hermite(phi,pi*pi,-2*pi*sqrt(ypi)*rcbrt((pi*rsqrt2)/tp),0._dp,-3*tp/tv2)
-         if(.not.(x>0))x=(t-tp)/tv2         ! model undershoot: parabolic limit
-         x=min(sqrt(x),pi*(1-1e-3_dp))
-         if(x>.75_dp*pi)then
-            ! Near the pole use its asymptote in d=pi-v with y~y(pi)-b*d**2/2:
-            ! T ~ pi*y**1.5/(sqrt2*d**3)+a*sqrt(y), so y/d**2 = Q, solved for d.
-            p=t-a*sqrt(ypi)
-            if(p>0)then
-               p=rcbrt(sqrt2*p/pi)**2+b/2
-               if(p>0)x=pi-min(sqrt(ypi/p),pi/4)
-            endif
-            ! Long way with y_end<<|b|: T plateaus at ~pi*|b|**1.5/4 before
-            ! the pole. Below it, cubic Hermite for v**2 in T between the
-            ! parabola (slope 1/tv2) and v=pi (dT/dv=|b|**1.5/2).
-            if(x>.75_dp*pi.and.b<0)then
-               p=pi*(-b)*sqrt(-b)/4
-               if(t<p.and.p>tp)then
-                  x=hermite((t-tp)/(p-tp),0._dp,(p-tp)/tv2,pi*pi,(p-tp)*4*pi/((-b)*sqrt(-b)))
-                  x=min(sqrt(max(x,0._dp)),pi*(1-1e-3_dp))
-               endif
-            endif
-         endif
-      else
-         ! Hyperbola in w=sqrt(-z)/2: w**2=(tp-t)/tv2 near the parabola.
-         k=-1;hi=huge(hi)
-         if(b>0)then
-            ! Short way: T -> 0 at the branch point y(wb)=0, wb=2*asinh(s).
-            sw=sqrt(y0/(2*b));dt=sqrt(1+sw*sw)
-            wb=2*log1p_c(sw+sw*sw/(1+dt));hi=wb
-            if(t<0.1_dp*tp)then
-               ! Solve in Y=sqrt(y): T=Y*(Y**2*F+a) with the exact
-               ! w(Y)=2*asinh(sqrt((y0-Y**2)/(2b))). Either term of
-               ! T = a*Y + F*Y**3 alone overestimates Y; start from the smaller.
-               call f_derivs(wb,-1,0,f)
-               yy=min(t/a,rcbrt(t/f(0)),0.9_dp*sqrt(y0))
-               ! Zero-height rectangles in Y avoid the branch-point
-               ! cancellation of hyperbolic anomaly space.
-               lo=0;hi=sqrt(y0)
-               if(.not.converge_y())return
-               sw=(y0-yy*yy)/(2*b);x=2*asinh(sqrt(sw))
-            else
-               ! Cubic Hermite for w**2 in (t/tp)**2 between the parabola and
-               ! wb, where T**2 ~ a**2*y has slope -a**2*b*sinh(wb).
-               x=hermite((t/tp)**2,wb*wb,-wb*tp*tp/(a*a*b*sw*dt),0._dp,-tp/(2*tv2))
-               if(.not.(x>0))x=(tp-t)/tv2
-               x=min(sqrt(x),wb*(1-1e-6_dp))
-            endif
-         else
-            ! Long way: T ~ sqrt(-b)*(y0+b)*exp(-w/2) as w -> infinity.
-            psi=rlog(tp/t)
-            x=sqrt(tp*psi/tv2)
-            if(psi>1)x=max(x,2*rlog(sqrt(-b)*(y0+b)/t))
-         endif
+         status=0;return                                         ! parabola, x=0
       endif
-   else
-      ! Multiple revolutions. Every ellipse through both points has a>=s/2,
-      ! so T > m*2*pi*(s/2)**1.5 (within 31% of the minimum time) rejects
-      ! most infeasible times without evaluating T.
-      status=5
-      dc=sqrt((rn1-rn2)**2+4*rn1*rn2*ss*ss);c=(rn1+rn2+dc)/2     ! chord, semiperimeter
-      if(t<m*pi*c*sqrt(c)/sqrt2*(1-1e-12_dp))return
-      if(.not.mrev_start())return
+      tref=tp
+      if(fixed_root())status=0
+      return
    endif
-
-   ! Store distance from the upper pole directly on near-full-period arcs.
-   ! Subtracting a converged v from pi loses the small arc information.
-   call pole_coordinate()
-
-   !======= Root: zero-height thin rectangles =======
-   if(x>0.and.yy<0.and..not.merged)then
-      ! Rare starter misses continue as a bracketed contour.
-      if(.not.contour_root())then
-         if(.not.converge())return
-      endif
-   endif
-   status=0
-   if(merged)status=1
+   ! Multiple revolutions. Every ellipse through both points has a>=s/2,
+   ! so T > m*2*pi*(s/2)**1.5 (within 31% of the minimum time) rejects
+   ! most infeasible times without evaluating T.
+   status=5
+   dc=sqrt((rn1-rn2)**2+4*rn1*rn2*ss*ss);c=(rn1+rn2+dc)/2     ! chord, semiperimeter
+   if(t<m*pi*c*sqrt(c)/sqrt2*(1-1e-12_dp))return
+   select case(mrev_global())
+    case(0)
+      return
+    case(1)
+      status=-4;tref=tmin
+      if(branch_fixed())status=0
+    case default
+      status=-4                                   ! certificate failed (not observed)
+   end select
 
    contains
 
-      ! Multi-revolution starter without the tables: minimum time by Halley,
-      ! then the branch starter. False (status 5) when t is below t_min.
-      logical function mrev_start() result(ok)
-         integer::it
-         real(dp)::p,dt,s
-         ok=.false.
-         ! Minimum time by Halley on T'(v) = 0, started at the large-m minimum
-         ! of y**1.5/sin(v)**3, cos v = b/(y(0)+b+sqrt(y(0)*y(pi))), which is
-         ! off by ~0.15/m. Halley leaves at most ~12*step**3 in v and ~150*
-         ! step**4 relative in tmin, so it stops once tmin decides feasibility
-         ! and locates the minimum well inside the distance to the root.
-         ! Half-angle functions follow from cos v, then by angle addition.
-         c=b/(y0+b+sqrt(y0*ypi))
-         x=acos(c);hs=sqrt((1-c)/2);hc=sqrt((1+c)/2)
-         do it=1,20
-            call time_derivs(x,1,m,y0,yend,a,b,d,hs,hc)
-            p=-2*d(1)*d(2)/(2*d(2)**2-d(1)*d(3))
-            dt=min(max(x+p,x/2),(x+pi)/2)-x
-            ! T and T'' at the step from the Taylor data (error O(step**4)).
-            tmin=d(0)+dt*(d(1)+dt*(d(2)/2+dt*d(3)/6))
-            x=x+dt;call rotate(1,x,dt/2,hs,hc)
-            ! A step below 1e-3 leaves ~1e-8 in v, and tmin is quadratic in it.
-            if(abs(dt)<=1e-3_dp)exit
-            if(abs(dt)<.3_dp.and.tmin>0)then
-               p=t-tmin;s=300*tmin*dt**4
-               if(p<-s)exit
-               if(p>s.and.12*abs(dt)**3<sqrt(2*p/max(d(2),tiny(p)))/8)exit
+      ! Multiple revolutions with no starter, table or iteration: two fixed
+      ! 32-node zero-height ratios over the whole interval [0,pi].
+      ! 1. v* is the only zero of D=T'*sin(v)**4 on (0,pi); D has no pole and
+      !    D(0)=-3m*pi*y0**1.5/sqrt2, D(pi)=3(m+1)*pi*ypi**1.5/sqrt2. Then
+      !    tmin=T(v*) is exact to rounding (T'(v*)=0) and decides feasibility.
+      ! 2. rho=sign(v-v*)*sqrt(1-(tmin/T)**(1/3)) rises from -1 to 1 through the
+      !    fold and both poles; branch br is its level set
+      !    rho=br*sqrt(1-(tmin/t)**(1/3)). T-tmin comes from sum-to-product
+      !    differences about v*, so rho keeps full precision near v*.
+      ! Each ratio is certified by its second moment; false hands the case to
+      ! the starter path (status unchanged).
+      integer function mrev_global() result(r)
+         real(dp)::tv(ng),t1(ng),ff(ng),fp(ng),xn(ng),wn(ng),sxn(ng),cxn(ng),dd(0:3),s,co,dv,dvp,fa,fb, &
+                   vs,err,hss,hcs,ss3,fs,ys,qs,sd,cd,sm,cm,dyv,dsv,dphi,ds3,dfv,yv,qv,dtv,u,ut,rt,rt2, &
+                   rho,rho2,den,du,sn,cs2,pv,pt,t2s,lo2,hi2,cen,hl,ve,q, &
+                   xn2(ng+2),sx2(ng+2),cx2(ng+2),tv2(ng+2),t12(ng+2),ff2(ng+2),fp2(ng+2),rr(ng+2)
+         integer::j,nj
+         logical::whole
+         r=2
+         ! Nodes: the whole interval while the sqrt(y) branch points stay away
+         ! from it (|b/(y0+b)|<=0.95); otherwise v* lies between the branch
+         ! points' scale and 1, and the interval [ve/2,2ve] around the large-m
+         ! minimum ve (cos ve = b/(y0+b+sqrt(y0*ypi))), or its mirror about pi,
+         ! keeps every singularity ~1.7 half-widths from the centre.
+         whole=abs(b)<=.95_dp*abs(y0+b)
+         if(whole)then
+            lo2=0;hi2=pi;xn=gv;wn=gw;sxn=gsv;cxn=gcv
+         else
+            ! For small m the a*sqrt(y) term moves v*: as y0/b -> 0, T'=0
+            ! balances 3m*pi*e2/v**3 against 2 (e2=2*y0/b), so v* is at most
+            ! (1.5m*pi*e2)**(1/3); towards pi it tends to ~2/((m+1)*pi) instead.
+            q=y0+b+sqrt(y0*ypi)
+            if(b>0)then
+               ve=2*asin(sqrt((y0+sqrt(y0*ypi))/(2*q)))          ! 1-cos ve, exact
+               ve=min(ve,rcbrt(3*m*pi*y0/b))
+               lo2=ve/2;hi2=min(2*ve,(ve+pi)/2)
+            else
+               ve=2*asin(sqrt((ypi+sqrt(y0*ypi))/(2*q)))         ! pi - ve
+               ve=max(ve,2/((m+1)*pi))
+               lo2=max(pi-2*ve,(pi-ve)/2);hi2=pi-ve/2
             endif
+            cen=(lo2+hi2)/2;hl=(hi2-lo2)/2
+            xn=[cen+hl*ggx,cen-hl*ggx];wn=[ggw*hl,ggw*hl]
+            do j=1,ng
+               call sincos_half(xn(j),sxn(j),cxn(j))
+            enddo
+         endif
+         do j=1,ng
+            call time_derivs(xn(j),1,m,y0,yend,a,b,dd,sxn(j),cxn(j))
+            tv(j)=dd(0);t1(j)=dd(1)
+            s=2*sxn(j)*cxn(j);co=(cxn(j)-sxn(j))*(cxn(j)+sxn(j))
+            dv=dd(1)*s**4;dvp=(dd(2)*s+4*dd(1)*co)*s**3
+            ff(j)=1/dv;fp(j)=-dvp*ff(j)*ff(j)
          enddo
-         ! T'' at the minimum; after a larger early-exit step near the pole the
-         ! linear update is unreliable and the starter needs only its scale.
-         p=d(2)+dt*d(3)
-         if(p>d(2)/2.or.abs(dt)<=1e-3_dp)d(2)=p
-         if(t<tmin*(1-16*epsilon(t)).or..not.(d(2)>0))return
-         merged=abs(t-tmin)<=16*epsilon(t)*tmin
-         if(merged)then
-            status=1
-            lo=x;hi=x
+         if(whole)then
+            fa=-sqrt2/(3*m*pi*y0*sqrt(y0));fb=sqrt2/(3*(m+1)*pi*ypi*sqrt(ypi))
+         else
+            ! The ends' signs certify that v* is inside.
+            call sincos_half(lo2,hss,hcs);call time_derivs(lo2,1,m,y0,yend,a,b,dd,hss,hcs)
+            s=2*hss*hcs;fa=1/(dd(1)*s**4)
+            call sincos_half(hi2,hss,hcs);call time_derivs(hi2,1,m,y0,yend,a,b,dd,hss,hcs)
+            s=2*hss*hcs;fb=1/(dd(1)*s**4)
+            if(.not.(fa<0.and.fb>0))return
+         endif
+         call global_ratio(ff,fp,fa,fb,lo2,hi2,xn,wn,(lo2+hi2)/2,vs,err)
+         if(.not.(vs>lo2.and.vs<hi2.and.err<=1e-13_dp*(hi2-lo2)))return
+         call sincos_half(vs,hss,hcs)
+         call time_derivs(vs,1,m,y0,yend,a,b,dd,hss,hcs)
+         tmin=dd(0);t2s=dd(2)
+         r=0;status=5
+         if(t<tmin*(1-16*epsilon(t)))return
+         if(abs(t-tmin)<=16*epsilon(t)*tmin)then
+            status=1;k=1;x=vs;hs=hss;hc=hcs;trig=.true.;return
          endif
          status=-4
-         ! Each branch: cubic Hermite in sig=sqrt(1-(tmin/t)**(1/3)) between the
-         ! minimum (v*-v ~ sqrt(6*tmin/T'')*sig) and the pole T ~ K/v**3 at sig=1.
-         p=tmin/t;sig=rcbrt(p)
-         sig=sqrt(max((1-p)/(1+sig+sig*sig),0._dp))   ! 1-p**(1/3) without cancellation
-         k0=y0*sqrt(y0)*m*pi/sqrt2;kpi=ypi*sqrt(ypi)*(m+1)*pi/sqrt2
-         ! Near a pole the asymptote with y quadratic in the pole distance d,
-         ! T ~ n*pi*y**1.5/(sqrt2*d**3)+a*sqrt(y), y ~ y_p+b*d**2/2 (v=0) or
-         ! y_p-b*d**2/2 (v=pi), gives y/d**2 = Q in closed form; it also covers
-         ! y_p<<|b|, where T plateaus before the pole; used when the Hermite
-         ! starter collapses onto the pole and the model root is well inside.
+         ! From here a failure keeps v* and tmin and goes to the branch starter.
+         r=1;x=vs;d=dd;hs=hss;hc=hcs
+         lo=lo2;hi=hi2
+         if(whole)then
+            lo=vs;hi=vs
+         endif
+         ! Branch target, 1-(tmin/t)**(1/3) without cancellation.
+         pt=tmin/t;ut=cbrt_c(pt);rt2=(1-pt)/(1+ut+ut*ut);rt=br*sqrt(rt2)
+         ! Values at v*: sin, F, y, sqrt(y).
+         s=2*hss*hcs;ss3=s**3
+         fs=(vs-s*(hcs-hss)*(hcs+hss)+m*pi)/(sqrt2*ss3)
+         ys=y0+2*b*hss*hss;if(b<0)ys=yend-2*b*hcs*hcs
+         qs=sqrt(ys)
+         ! rho at the nodes; on a scaled interval also at its ends (j=ng+1:
+         ! lo2, ng+2: hi2), where the level set must change sign.
+         nj=ng
+         if(.not.whole)then
+            nj=ng+2;xn2(ng+1)=lo2;xn2(ng+2)=hi2
+            call sincos_half(lo2,sx2(ng+1),cx2(ng+1));call sincos_half(hi2,sx2(ng+2),cx2(ng+2))
+            call time_derivs(lo2,1,m,y0,yend,a,b,dd,sx2(ng+1),cx2(ng+1));tv2(ng+1)=dd(0);t12(ng+1)=dd(1)
+            call time_derivs(hi2,1,m,y0,yend,a,b,dd,sx2(ng+2),cx2(ng+2));tv2(ng+2)=dd(0);t12(ng+2)=dd(1)
+         endif
+         xn2(1:ng)=xn;sx2(1:ng)=sxn;cx2(1:ng)=cxn;tv2(1:ng)=tv;t12(1:ng)=t1
+         do j=1,nj
+            ! Half-angle functions of d=v-v* and of (v+v*)/2 by angle
+            ! addition; sin(d/2) by its series where the addition cancels.
+            dv=xn2(j)-vs
+            if(abs(dv)<.5_dp)then
+               sd=dv/2;sn=sd*sd
+               sd=sd*(1-sn/6*(1-sn/20*(1-sn/42*(1-sn/72*(1-sn/110*(1-sn/156))))))
+            else
+               sd=sx2(j)*hcs-cx2(j)*hss
+            endif
+            cd=cx2(j)*hcs+sx2(j)*hss
+            sm=sx2(j)*hcs+cx2(j)*hss;cm=cx2(j)*hcs-sx2(j)*hss
+            s=2*sx2(j)*cx2(j)
+            dyv=2*b*sm*sd                                  ! y(v)-y(v*)
+            dsv=2*cm*sd                                    ! sin v - sin v*
+            cs2=1-2*sm*sm                                  ! cos(v+v*)
+            dphi=dv-cs2*2*sd*cd                            ! v-sin v cos v, differenced
+            ds3=dsv*(s*s+s*(2*hss*hcs)+(2*hss*hcs)**2)
+            dfv=(dphi/sqrt2-fs*ds3)/s**3                   ! F(v)-F(v*)
+            yv=ys+dyv;qv=sqrt(yv)
+            pv=yv*(fs+dfv)+a
+            dtv=dyv/(qv+qs)*pv+qs*(dyv*(fs+dfv)+ys*dfv)    ! T(v)-tmin
+            u=cbrt_c(tmin/tv2(j))
+            rho2=(dtv/tv2(j))/(1+u+u*u)
+            rho=sign(sqrt(max(rho2,0._dp)),dv)
+            ! 1/(rho-rt) = (rho+rt)/(rho**2-rt**2); the difference is taken
+            ! where it is accurate: in u near the poles, in rho**2 near v*.
+            den=rho2-rt2
+            if(u<.5_dp)den=ut-u
+            du=-u*t12(j)/(3*tv2(j))
+            ff2(j)=(rho+rt)/den;rr(j)=rho
+            if(rho/=0)then
+               fp2(j)=(-du/(2*rho))/den+(rho+rt)*du/(den*den)
+            else
+               fp2(j)=sqrt(max(t2s,0._dp)/(6*tmin))/den     ! d rho/dv at v*
+            endif
+         enddo
+         if(whole)then
+            fa=1/(-1-rt);fb=1/(1-rt)
+         else
+            if(.not.(rr(ng+1)<rt.and.rt<rr(ng+2)))return  ! root outside: starter path
+            fa=ff2(ng+1);fb=ff2(ng+2)
+         endif
+         call global_ratio(ff2,fp2,fa,fb,lo2,hi2,xn,wn,(lo2+hi2)/2,vs,err)
+         if(.not.(err<=1e-13_dp*(hi2-lo2).and.(vs-x)*br>0.and.vs>lo2.and.vs<hi2))return
+         ! Near either pole recentre the moment there, so the small distance
+         ! keeps its relative precision.
+         k=1
+         if(vs<.25_dp)then
+            call global_ratio(ff2,fp2,fa,fb,lo2,hi2,xn,wn,0._dp,vs,err)
+         elseif(vs>pi-.25_dp)then
+            call global_ratio(ff2,fp2,fa,fb,lo2,hi2,xn,wn,pi,vs,err)
+            vs=pi-vs;k=2
+         endif
+         if(.not.(vs>0))then
+            k=1;return
+         endif
+         x=vs;call sincos_half(x,hs,hc);trig=.true.
+         status=0;r=0
+      end function
+
+
+
+      ! Zero revolutions: the region decides the coordinate, in which the
+      ! root's neighbourhood is free of singularities for every geometry:
+      !  ellipse, root v>=2 (t>=T(2)):  d=pi-v on [-1/2,pi-1.8] (kind 2), or
+      !    for b/(y0+b)<-1/2, where the sqrt(y) branch points close in on
+      !    the pole, zeta about pi (kind 3);
+      !  ellipse, root v<2: Y=sqrt(y) up to v=2.2 for b/(y0+b)>0.7 (kind 1),
+      !    else X=+-v**2 on [Xa,2.2**2] (kind 6);
+      !  hyperbola: Y on [0,0.9*sqrt(y(pi))] when b>0 and T there exceeds t
+      !    (kind 1); else X for w<=1.75 (kind 6); else w around the
+      !    asymptotic root (kind 7).
+      logical function fixed_root() result(ok)
+         real(dp)::lo2,hi2,lr,tz,fz,fpz,cc,e
+         integer::kz
+         s3=cbrt_c(tref/t);lr=b/(y0+b)
+         if(t>tp)then
+            call zeval(5,2._dp,fz,fpz,tz)                    ! T(v=2)
+            if(t>=tz)then
+               if(lr>=-.5_dp)then
+                  kz=2;lo2=-.5_dp;hi2=pi-1.8_dp
+               else
+                  kz=3;s0=sqrt(yend/(-2*b));lo2=0;hi2=asinh(sin((pi-1.8_dp)/2)/s0)
+               endif
+            elseif(lr>.7_dp)then
+               kz=1;lo2=0;hi2=sqrt(y0+2*b*sin(1.1_dp)**2)
+            else
+               kz=6;lo2=xlow();hi2=2.2_dp**2
+            endif
+         else
+            kz=0
+            if(b>0)then
+               hi2=.9_dp*sqrt(ypi)
+               call zeval(1,hi2,fz,fpz,tz)
+               if(tz>t)then
+                  kz=1;lo2=0
+               endif
+            endif
+            if(kz==0)then
+               call zeval(7,1.75_dp,fz,fpz,tz)               ! T(w=1.75)
+               if(t>=tz)then
+                  kz=6;lo2=xlow();hi2=2.2_dp**2
+               else
+                  ! Large w: T ~ sqrt2*c*sqrt(c-b*E/2)/E, E=exp(w), c=y0+b.
+                  kz=7;cc=y0+b
+                  e=(-cc*cc*b+sqrt((cc*cc*b)**2+8*t*t*cc**3))/(2*t*t)
+                  lo2=max(1.5_dp,log(e)-2);hi2=lo2+4
+                  if(b>0)hi2=min(hi2,2*asinh(sqrt(y0/(2*b)))-.5_dp)
+               endif
+            endif
+         endif
+         ok=ratio_root(kz,lo2,hi2)
+      end function
+
+      ! Lower end of the X interval: clear of the short-way branch point.
+      real(dp) function xlow() result(xa)
+         xa=-4
+         if(b>0)xa=max(xa,-2*asinh(sqrt(y0/(2*b)))**2)
+      end function
+
+      ! Multi-revolution branch outside the minimum's interval [lo,hi] (or
+      ! lo=hi=v* when that ratio did not certify): sigma=(tmin/T)**(1/3) from
+      ! the pole to the interval, in zeta about the pole when the sqrt(y)
+      ! branch points crowd it (kinds 4, 3), else in v or d (kinds 5, 2).
+      logical function branch_fixed() result(ok)
+         real(dp)::lo2,hi2
+         integer::kz
+         s3=cbrt_c(tref/t);lo2=0
          if(br<0)then
-            hi=x
-            x=hermite(sig,x,-sqrt(6*tmin/d(2)),0._dp,-2*rcbrt(k0/tmin))
-            p=t-a*sqrt(y0)
-            if(p>0.and.x<.02_dp*hi)then
-               p=rcbrt(sqrt2*p/(m*pi))**2-b/2
-               if(p>0)then
-                  if(sqrt(y0/p)<hi/2)x=sqrt(y0/p)
-               endif
+            if(b>0.and.lo<hi)then
+               kz=4;s0=sqrt(y0/(2*b));hi2=asinh(sin(lo/2)/s0)
+            else
+               kz=5;hi2=lo
             endif
          else
-            lo=x
-            x=pi-hermite(sig,pi-x,-sqrt(6*tmin/d(2)),0._dp,-2*rcbrt(kpi/tmin))
-            p=t-a*sqrt(ypi)
-            if(p>0.and.pi-x<.02_dp*(pi-lo))then
-               p=rcbrt(sqrt2*p/((m+1)*pi))**2+b/2
-               if(p>0)then
-                  if(sqrt(ypi/p)<(pi-lo)/2)x=pi-sqrt(ypi/p)
-               endif
+            if(b<0.and.lo<hi)then
+               kz=3;s0=sqrt(yend/(-2*b));hi2=asinh(sin((pi-hi)/2)/s0)
+            else
+               kz=2;hi2=pi-hi
             endif
          endif
-         if(t-tmin<1e-2_dp*tmin)then
-            ! Close to the minimum, invert t-tmin = T''/2*e**2 + T'''/6*e**3 by
-            ! series reversion; the root may lie far inside the bracket margin.
-            p=sqrt(2*(t-tmin)/d(2))
-            x=merge(hi,lo,br<0)+merge(-p,p,br<0)-d(3)/(6*d(2))*p*p
-            x=min(max(x,lo+p/2),hi-p/2)
-         else
-            x=min(max(x,lo+(hi-lo)*1e-3_dp),hi-(hi-lo)*1e-3_dp)
-         endif
+         ok=ratio_root(kz,lo2,hi2)
+      end function
+
+      ! One fixed 32-node ratio in coordinate kz on [l0,h0], certified by
+      ! the signs at the ends and the second moment; sets k, x, hs, hc (or yy).
+      ! In zeta the singularities lie at height pi/2 while the interval grows
+      ! like log(1/s0), so it is cut into equal pieces of length <= 4 and the
+      ! piece holding the sign change is taken.
+      logical function ratio_root(kz,l0,h0) result(ok)
+         integer,intent(in)::kz
+         real(dp),intent(in)::l0,h0
+         real(dp)::zn(ng),wn(ng),ff(ng),fp(ng),fa,fb,z,err,tz,dz,cen,hl,lo2,hi2
+         integer::j,np
+         ok=.false.
+         lo2=l0;hi2=h0;np=1
+         if(kz==3.or.kz==4)np=ceiling((h0-l0)/4)
+         hl=(h0-l0)/np
+         do j=1,np-1
+            call zeval(kz,l0+j*hl,fa,dz,tz)
+            if(fa>0)then
+               hi2=l0+j*hl;exit
+            endif
+            lo2=l0+j*hl
+         enddo
+         cen=(lo2+hi2)/2;hl=(hi2-lo2)/2
+         if(.not.(hl>0))return
+         zn=[cen+hl*ggx,cen-hl*ggx];wn=[ggw*hl,ggw*hl]
+         do j=1,ng
+            call zeval(kz,zn(j),ff(j),fp(j),tz)
+         enddo
+         call zeval(kz,lo2,fa,dz,tz);call zeval(kz,hi2,fb,dz,tz)
+         if(.not.(fa<0.and.fb>0))return
+         call global_ratio(ff,fp,fa,fb,lo2,hi2,zn,wn,cen,z,err)
+         ! A root near the lower end keeps its relative precision with the
+         ! moment taken about that end.
+         if(z-lo2<.25_dp*(hi2-lo2))call global_ratio(ff,fp,fa,fb,lo2,hi2,zn,wn,lo2,z,err)
+         if(.not.(z>lo2.and.z<hi2.and.err<=1e-10_dp*(hi2-lo2)))return
+         if(kz/=6.and..not.(z>0))return
+         trig=.true.
+         select case(kz)
+          case(1)
+            yy=z
+          case(2)
+            k=2;x=z;call sincos_half(x,hs,hc)
+          case(3,4)
+            call shch(z,tz,dz);hs=s0*tz;hc=sqrt((1-hs)*(1+hs))
+            k=1;if(kz==3)k=2
+            x=2*asin(hs)
+          case(5)
+            k=1;x=z;call sincos_half(x,hs,hc)
+          case(6)
+            x=sqrt(abs(z))
+            if(z>=0)then
+               k=1;call sincos_half(x,hs,hc)
+            else
+               k=-1;call shch(x/2,hs,hc)
+            endif
+          case(7)
+            k=-1;x=z;call shch(x/2,hs,hc)
+         end select
          ok=.true.
       end function
 
-      subroutine pole_coordinate()
-         real(dp)::p
-         if(k==1.and.x>0.75_dp*pi.and..not.merged)then
-            p=lo;lo=pi-hi;hi=pi-p;x=pi-x;k=2
-         endif
-      end subroutine
-
-      ! Root from zero-height thin rectangles; no derivative steps. Stage 1
-      ! (8 nodes, half-width L~R/4, R the distance to the nearest singularity
-      ! of 1/(T-t)) needs only to contain the starter's root, and then usually
-      ! reaches rounding level. The ratio stays exact for a pole outside the
-      ! interval, so a consistent estimate outside it re-centres. The
-      ! disagreement de of two independent ratios measures the error; when
-      ! above rounding, stage 2 (3 nodes, half-width ~16*de, far inside R)
-      ! converges like (L/2R)**6. Every accepted interval must show a sign
-      ! change of T-t. Singularities: branch points of sqrt(y), the mirror
-      ! root of the even m=0 time function, the other multirevolution branch,
-      ! and the complex roots of T=t near a pole of T. Near the parabola the
-      ! coordinate is X=k*x**2, where T is a series in X. On failure the
-      ! state is restored for the safeguarded fallback.
-      logical function contour_root() result(ok)
-         integer::k0
-         real(dp)::lo0,hi0
-         k0=k;lo0=lo;hi0=hi
-         ok=rect_root()
-         if(.not.ok)then
-            k=k0;lo=lo0;hi=hi0;trig=.false.
-         endif
-      end function
-
-      logical function rect_root() result(ok)
-         real(dp)::c,rr,el,dd,de,beta,eta,grow,clamped,stp,bim
-         integer::kind1,kr,pass
-         logical::sc,outside,nox,near
-         ok=.false.
-         ! Branch points of sqrt(y), computed once: for b>0 at v=+-i*beta
-         ! (w=beta); for b<0, with s**2=y0/(-2b)=1+(y0+2b)/(-2b), at
-         ! v=pi+-i*eta, w=eta+-i*pi (s>1), or w=+-i*bim (s<=1, hyperbolic).
-         ! Only distances are needed, so the inverse functions are approximate.
-         ! The short-way hyperbola keeps its exact w bound hi, which the root
-         ! may approach arbitrarily closely.
-         beta=0;eta=0;bim=-1
-         if(b>0)then
-            beta=2*rasinh(sqrt(y0/(2*b)))
-            if(k<0)beta=hi
-         endif
-         if(b<0)then
-            if(y0+2*b>=0)then
-               eta=2*rasinh(sqrt((y0+2*b)/(-2*b)))
+      ! f, f' and T at z in coordinate kz, for f = 1/g with g increasing:
+      !  1 Y=sqrt(y), g=T-t; T=Y*(Y**2*F+a) with y=Y**2 exact and F from
+      !    q=sin(v/2)**2=(y-y0)/(2b) (negative on hyperbolas);
+      !  2 d=pi-v, 3 zeta about pi (sin(d/2)=s0*sinh), 4 zeta about 0
+      !    (sin(v/2)=s0*sinh), 5 v: g=sigma-s3, sigma=(tref/T)**(1/3), which is
+      !    zero at a pole (z=0 there);
+      !  6 X=+-v**2: g=T-t;  7 w: g=log(t/T).
+      subroutine zeval(kz,z,f,fp,tt)
+         integer,intent(in)::kz
+         real(dp),intent(in)::z
+         real(dp),intent(out)::f,fp,tt
+         real(dp)::q,h1,h2,xx,fd(0:3),dt,sg,dd(0:3),sh,ch
+         select case(kz)
+          case(1)
+            if(z==0)then
+               tt=0;f=-1/t;fp=0;return
+            endif
+            q=(z*z-y0)/(2*b);h1=sqrt(abs(q));h2=sqrt(1-q)
+            if(q>=0)then
+               xx=2*asin(h1);call f_derivs(xx,1,0,fd,2*h1*h2,1-2*q)
+               dt=fd(1)/(h1*h2)                         ! dF/dq
             else
-               bim=2*rasin(sqrt(y0/(-2*b)))
+               xx=2*asinh(h1);call f_derivs(xx,-1,0,fd,2*h1*h2,1-2*q)
+               dt=-fd(1)/(h1*h2)
             endif
-         endif
-         c=x;kind1=k;nox=.false.;de=0
-         ! Stage 1 starts at L~R/4, where 8 nodes usually reach rounding
-         ! level. A self-consistent estimate outside the interval re-centres
-         ! (going straight to stage 2 if already precise enough); an
-         ! inconsistent one (root far away) doubles L, up to ~R.
-         grow=4
-         outside=.false.
-         do pass=1,5
-            call canonical(kind1,c,de,nox)
-            if(.not.trig.and.kind1>0)then
-               call sincos_half(c,hs,hc);trig=.true.
-            elseif(.not.trig.and.kind1<0)then
-               call shch(c/2,hs,hc);trig=.true.
-            endif
-            rr=reach(kind1,c,beta,eta,bim)
-            el=min(1._dp,rr/grow);clamped=el
-            if(kind1==0)el=min(el,.2_dp-abs(c))
-            ! Never reach a pole of T: the sign test would see its jump.
-            if(kind1==2.or.(kind1==1.and.m>0))el=min(el,.9_dp*c)
-            if(kind1==1.or.(kind1==2.and.m>0))el=min(el,.9_dp*(pi-c))
-            clamped=el-clamped
-            if(.not.(el>0))return
-            kr=kexp(el)
-            if(kr>kmax)return
-            call rect_ratio(kind1,c,hs,hc,kr,.true.,y0,yend,a,b,t,m,dd,de,sc)
-            el=pow2m(kr)
-            if(abs(dd)<.8_dp*el.and.de<.1_dp*el.and.sc)then
-               c=c+dd;call rotate(kind1,c,dd/2,hs,hc);exit
-            endif
-            if(pass==5)return
-            if(abs(dd)<8*el.and.de<.5_dp*abs(dd))then
-               near=abs(dd)<1.5_dp*el
-               c=c+dd;call rotate(kind1,c,dd/2,hs,hc)
-               if(kind1/=0.and..not.(c>lo.and.c<hi))return
-               call canonical(kind1,c,de,nox)
-               ! Just outside and precise: stage 2 certifies its own sign
-               ! change. Farther out de is no error bound; repeat stage 1.
-               if(near.and.de<reach(kind1,c,beta,eta,bim)/256)then
-                  outside=.true.;exit
-               endif
-            elseif(clamped<0.and.abs(dd)<huge(dd).and.kind1/=0)then
-               ! L is capped by a pole: step towards the estimate instead.
-               stp=sign(min(abs(dd),el),dd)
-               c=c+stp;call rotate(kind1,c,stp/2,hs,hc)
-               if(.not.(c>lo.and.c<hi))return
-               call canonical(kind1,c,de,nox)
-            elseif(kind1==0)then
-               ! Root beyond the series region: widen in the anomaly coordinate.
-               kind1=1;if(c<0)kind1=-1
-               c=sqrt(abs(c));grow=2;nox=.true.;trig=.false.
-            elseif(grow>1.1_dp)then
-               grow=grow/2
+            tt=z*(z*z*fd(0)+a)
+            dt=3*z*z*fd(0)+a+z**4*dt/b
+            f=1/(tt-t);fp=-dt*f*f
+            return
+          case(6)
+            xx=sqrt(abs(z))
+            if(z>=0)then
+               call sincos_half(xx,sh,ch);call time_derivs(xx,1,0,y0,yend,a,b,dd,sh,ch)
+               dt=dd(1)/(2*xx)
             else
-               return
+               call time_derivs(xx,-1,0,y0,yend,a,b,dd);dt=-dd(1)/(2*xx)
             endif
-         enddo
-         call canonical(kind1,c,de,nox)
-         ! Rounding-level error needs no second stage. Velocities are smooth in
-         ! X near the parabola, so there the floor is absolute.
-         rr=max(abs(c),el*1e-3_dp)
-         if(kind1==0)rr=max(abs(c),1e-2_dp)
-         if(outside.or.de>4*epsilon(c)*rr)then
-            rr=reach(kind1,c,beta,eta,bim)
-            el=min(rr/16,max(16*de,1e-7_dp*rr))
-            if(outside)el=min(rr/16,max(16*de,1e-4_dp*rr))
-            kr=kexp(el)
-            if(kr>kmax)return
-            ! 3 nodes suffice far inside R; otherwise use the 8-node rule.
-            if(.not.trig.and.kind1>0)then
-               call sincos_half(c,hs,hc);trig=.true.
-            elseif(.not.trig.and.kind1<0)then
-               call shch(c/2,hs,hc);trig=.true.
-            endif
-            call rect_ratio(kind1,c,hs,hc,kr,el>rr/1024,y0,yend,a,b,t,m,dd,de,sc)
-            el=pow2m(kr)
-            if(.not.(abs(dd)<.8_dp*el.and.de<1e-3_dp*el.and.sc))return
-            c=c+dd;call rotate(kind1,c,dd/2,hs,hc)
-         endif
-         if(kind1==0)then
-            if(c==0)return
-            k=1;if(c<0)k=-1
-            x=sqrt(abs(c));trig=.false.
-         else
-            k=kind1;x=c
-         endif
-         ok=x>0
-      end function
-
-      ! Coordinate for a zero-revolution estimate: X=k*x**2 (series) when
-      ! |x|<0.3 unless excluded (nox), the anomaly beyond |X|=0.15. The error
-      ! estimate de is carried into the new coordinate.
-      subroutine canonical(kind1,c,de,nox)
-         integer,intent(inout)::kind1
-         real(dp),intent(inout)::c,de
-         logical,intent(in)::nox
-         real(dp)::q
-         ! Elliptic v versus distance from the upper pole, with the bracket.
-         if((kind1==1.and.c>.8_dp*pi).or.(kind1==2.and.c>.3_dp*pi))then
-            q=lo;lo=pi-hi;hi=pi-q;c=pi-c;kind1=3-kind1
-            q=hs;hs=hc;hc=q
-         endif
-         if(m/=0)return
-         if(kind1==0.and.abs(c)>.15_dp)then
-            kind1=1;if(c<0)kind1=-1
-            c=sqrt(abs(c));de=de/(2*c);trig=.false.
-         elseif(abs(kind1)==1.and.c<.3_dp.and..not.nox)then
-            c=max(c,0._dp);de=(2*c+de)*de;c=kind1*c*c;kind1=0;trig=.false.
-         endif
-      end subroutine
-
-      ! Distance from c to the nearest singularity of 1/(T-t) in the local
-      ! coordinate (kind 0: X; 1: v; 2: pi-v; -1: w).
-      real(dp) function reach(kind1,c,beta,eta,bim) result(rr)
-         integer,intent(in)::kind1
-         real(dp),intent(in)::c,beta,eta,bim
-         rr=huge(rr)
-         select case(kind1)
-         case(0)
-            if(b>0)then
-               rr=abs(c+beta*beta)
-            elseif(bim>=0)then
-               rr=abs(c-bim*bim)
-            elseif(b<0)then
-               rr=sqrt((c-pi*pi+eta*eta)**2+(2*pi*eta)**2)
-            endif
-            rr=min(rr,.4_dp)
-         ! Near a pole of T (v=pi; also v=0 for m>0) T~K/d**3, so T=t has two
-         ! complex roots (poles of 1/(T-t)) at sqrt(3) times the distance d.
-         case(1)
-            if(b>0)rr=sqrt(c*c+beta*beta)
-            if(b<0)rr=sqrt((pi-c)**2+eta*eta)
-            rr=min(rr,1.6_dp*(pi-c))
-            if(m>0)rr=min(rr,1.6_dp*c)
-         case(2)
-            if(b>0)rr=sqrt((pi-c)**2+beta*beta)
-            if(b<0)rr=sqrt(c*c+eta*eta)
-            rr=min(rr,1.6_dp*c)
-            if(m>0)rr=min(rr,1.6_dp*(pi-c))
-         case default
-            if(b>0)then
-               rr=beta-c
-            elseif(bim>=0)then
-               rr=sqrt(c*c+bim*bim)
-            elseif(b<0)then
-               rr=sqrt((c-eta)**2+pi*pi)
-            endif
+            tt=dd(0);f=1/(tt-t);fp=-dt*f*f
+            return
+          case(7)
+            call time_derivs(z,-1,0,y0,yend,a,b,dd)
+            tt=dd(0);sg=log(t/tt);f=1/sg;fp=dd(1)/tt*f*f   ! g'=-T'/T
+            return
          end select
-         if(kind1/=0)then
-            if(m==0.and.kind1/=2)then
-               rr=min(rr,2*c)
-            elseif(m>0)then
-               ! Only the minimum end of the bracket matters: beyond it lies the
-               ! other branch's root. The pole of T at the other end is a zero
-               ! of 1/(T-t), not a singularity.
-               if((kind1==1).eqv.(br<0))then
-                  rr=min(rr,hi-c)
-               else
-                  rr=min(rr,c-lo)
-               endif
-            endif
+         if(z==0)then
+            tt=huge(z);f=-1/s3;fp=0;return               ! pole: sigma=0
          endif
-      end function
-
-
-
-      ! Very short hyperbolas: the bracketed contour in Y=sqrt(y), where
-      ! T(Y)=Y*(Y**2*F(w)+a) is increasing and w(Y)=2*asinh(sqrt((y0-Y**2)/(2b)))
-      ! avoids the branch-point cancellation of w. Intervals stay inside
-      ! (0,sqrt(y0)); w=0 at Y=sqrt(y0) is the only nearby singularity.
-      logical function converge_y() result(ok)
-         real(dp)::res,trial,el,dd,de,tt,dtt,ft(n1+2),f1(n1+2),q0,q1,q2,xj
-         integer::j,i
-         ok=.false.;el=(hi-lo)/4
-         do j=1,max_steps
-            call ytime(yy,tt,dtt)
-            res=tt-t
-            if(abs(res)<=16*epsilon(t)*t)then
-               ok=.true.;return
-            endif
-            if(res<0)then
-               lo=yy
+         select case(kz)
+          case(2)
+            call sincos_half(z,sh,ch);call time_derivs(z,2,m,y0,yend,a,b,dd,sh,ch)
+            dt=dd(1)
+          case(3,4)
+            call shch(z,sh,ch);h1=s0*sh;h2=sqrt((1-h1)*(1+h1))
+            if(kz==3)then
+               call time_derivs(2*asin(h1),2,m,y0,yend,a,b,dd,h1,h2)
             else
-               hi=yy
+               call time_derivs(2*asin(h1),1,m,y0,yend,a,b,dd,h1,h2)
             endif
-            if(.not.(hi-lo>8*epsilon(yy)*yy))then
-               ok=abs(res)<=1e-12_dp*t;return
-            endif
-            el=min(el,hi-lo,.9_dp*yy,.9_dp*(sqrt(y0)-yy))
-            trial=(lo+hi)/2
-            if(el>0)then
-               ! The zero-height rectangle of rect_ratio, in Y.
-               do i=1,n1+2
-                  call ytime(yy+el*u8(i),tt,dtt)
-                  ft(i)=1/(tt-t);f1(i)=-dtt*ft(i)**2
-               enddo
-               q0=0;q1=0;q2=0
-               do i=1,n1
-                  xj=el*u8(i)
-                  q0=q0+w8(i)*f1(i);q1=q1+w8(i)*(xj*f1(i)+ft(i));q2=q2+w8(i)*xj*(xj*f1(i)+2*ft(i))
-               enddo
-               q0=ft(n1+1)-ft(n1+2)-el*q0
-               q1=el*(ft(n1+1)+ft(n1+2))-el*q1
-               q2=el*el*(ft(n1+1)-ft(n1+2))-el*q2
-               dd=q1/q0;de=abs(q2/q0-dd*dd)/el
-               if(ft(n1+1)*ft(n1+2)<0)then
-                  lo=max(lo,yy-el);hi=min(hi,yy+el)
-                  if(de<=4*epsilon(yy)*yy.and.abs(dd)<el)then
-                     yy=yy+dd;ok=yy>0;return
-                  endif
-                  el=max(16*de,1e-7_dp*yy)
-               elseif(.not.(abs(dd)<huge(dd)))then
-                  el=el/2
-               elseif(abs(dd)>=el)then
-                  if(res<0)then
-                     lo=max(lo,yy+el)
-                  else
-                     hi=min(hi,yy-el)
-                  endif
-                  el=2*el
-               endif
-               if(abs(dd)<huge(dd).and.yy+dd>lo.and.yy+dd<hi)trial=yy+dd
-            endif
-            if(abs(trial-yy)<=8*epsilon(t)*max(abs(yy),tiny(t)))then
-               ok=abs(res)<=1e-12_dp*t;return
-            endif
-            yy=trial
-         enddo
-      end function
-
-      ! T(Y) and dT/dY on the short-way hyperbola, with sinh(w/2)=s:
-      ! dw/dY = -2Y/(b*sinh(w)).
-      subroutine ytime(yv,tt,dtt)
-         real(dp),intent(in)::yv
-         real(dp),intent(out)::tt,dtt
-         real(dp)::s,shw,ff(0:3)
-         s=sqrt((y0-yv*yv)/(2*b))
-         shw=2*s*sqrt(1+s*s)
-         call f_derivs(2*asinh(s),-1,0,ff,shw,1+2*s*s)
-         tt=yv*(yv*yv*ff(0)+a)
-         dtt=3*yv*yv*ff(0)+a-2*yv**4*ff(1)/(b*shw)
+            dt=dd(1)*2*s0*ch/h2
+          case default
+            call sincos_half(z,sh,ch);call time_derivs(z,1,m,y0,yend,a,b,dd,sh,ch)
+            dt=dd(1)
+         end select
+         tt=dd(0);sg=cbrt_c(tref/tt)
+         f=1/(sg-s3);fp=sg*dt/(3*tt)*f*f                ! -dsigma*f**2
       end subroutine
-
-      ! Bracketed contour for rare starter misses: every estimate is a
-      ! zero-height rectangle ratio, with no derivative step. T is monotone
-      ! on the branch, so the sign of T-t at the centre and the rectangle's
-      ! own sign test shrink [lo,hi]; an estimate outside it is replaced by
-      ! the midpoint. A rectangle that leaves the domain (dd not finite)
-      ! carries no sign information and only halves L.
-      logical function converge() result(ok)
-         real(dp)::res,trial,sgn,el,dd,de,hs2,hc2,cr,elr,xl,xh,xe,wide
-         integer::j,kr
-         logical::sc,series
-         ok=.false.
-         ! Monotone direction of the selected branch.
-         sgn=1
-         if(k<0.or.(m>0.and.br<0))sgn=-1
-         if(k==2)sgn=-sgn
-         if(k<0.and.b<0)then
-            hi=max(2*x,1._dp)
-            do j=1,100
-               call time_derivs(hi,k,m,y0,yend,a,b,d)
-               if(d(0)<t)exit
-               hi=hi*1.5_dp
-               if(hi>300)return
-            enddo
-         endif
-         trig=.false.;el=(hi-lo)/4
-         do j=1,max_steps
-            call time_derivs(x,k,m,y0,yend,a,b,d)
-            res=d(0)-t
-            if(abs(res)<=16*epsilon(t)*t)then
-               ok=.true.;return
-            endif
-            ! Rectangles stay inside the bracket as it was before this step,
-            ! so they never reach the other branch beyond t_min or a pole.
-            wide=min(x-lo,hi-x)
-            if(res*sgn<0)then
-               lo=x
-            else
-               hi=x
-            endif
-            if(.not.(hi-lo>8*epsilon(x)*x))then
-               ok=abs(res)<=1e-12_dp*t;return
-            endif
-            ! Never reach a pole of T (v=pi; also v=0 for m>0) or w<0.
-            el=min(el,1._dp,.9_dp*x,.9_dp*wide)
-            if(k==1.or.(k==2.and.m>0))el=min(el,.9_dp*(pi-x))
-            trial=(lo+hi)/2
-            ! Near the parabola the rectangle works in X=k*x**2, where T is a
-            ! series; in x the closed form cancels (x - sin x cos x ~ x**3).
-            series=m==0.and.k/=2.and.x<.3_dp
-            cr=x;elr=el
-            if(series)then
-               cr=k*x*x;elr=min(2*x*el,.2_dp-abs(cr))
-            endif
-            kr=kexp(elr)
-            if(elr>0.and.kr<=kmax)then
-               if(series)then
-                  call rect_ratio(0,cr,0._dp,1._dp,kr,.true.,y0,yend,a,b,t,m,dd,de,sc)
-               else
-                  if(k>0)then
-                     hs2=sin(x/2);hc2=cos(x/2)
-                  else
-                     call shch(x/2,hs2,hc2)
-                  endif
-                  call rect_ratio(k,x,hs2,hc2,kr,.true.,y0,yend,a,b,t,m,dd,de,sc)
-               endif
-               elr=pow2m(kr)
-               ! The rectangle's ends and its estimate, mapped back to x.
-               xl=xof(cr-elr,series,k);xh=xof(cr+elr,series,k)
-               if(xl>xh)then
-                  xe=xl;xl=xh;xh=xe
-               endif
-               xe=-1
-               if(abs(dd)<huge(dd))xe=xof(cr+dd,series,k)
-               if(sc)then
-                  lo=max(lo,xl);hi=min(hi,xh)
-                  if(de<=4*epsilon(x)*max(abs(cr),merge(1e-2_dp,elr*1e-3_dp,series)).and.abs(dd)<elr.and.xe>0)then
-                     x=xe;ok=.true.;return
-                  endif
-                  el=max(16*de,1e-7_dp*abs(cr))
-                  if(series)el=el/(2*x)
-               elseif(.not.(abs(dd)<huge(dd)))then
-                  el=el/2
-               else
-                  ! No sign change. When the ratio also puts the root outside,
-                  ! the bracket moves past the rectangle; near the root both can
-                  ! be rounding noise, and then neither moves it.
-                  if(abs(dd)>=elr)then
-                     if(res*sgn<0)then
-                        lo=max(lo,xh)
-                     else
-                        hi=min(hi,xl)
-                     endif
-                  endif
-                  el=hi-lo
-               endif
-               if(xe>lo.and.xe<hi)trial=xe
-            endif
-            if(abs(trial-x)<=8*epsilon(t)*max(abs(x),1e-100_dp))then
-               ok=abs(res)<=1e-12_dp*t;return
-            endif
-            x=trial
-         enddo
-      end function
 
    end subroutine general_root
 
@@ -1095,6 +930,24 @@ contains
    ! Nodes (kind 0: X=k*x**2 series; 1: v; 2: pi-v; -1: w) are evaluated
    ! in one fused loop per coordinate; hs,hc are the half-angle functions
    ! of c and the tables those of L*u, combined by angle addition.
+   ! Zero-height ratio over [lo,hi] with the 32-node rule (nodes xn, weights
+   ! wn including the half-width): root = c + Q[((v-c)f)']/Q[f'] for the one
+   ! simple pole of f inside, where Q[g'] = g(hi)-g(lo)-sum wn*g'. f, fp: f
+   ! and f' at the nodes; fa, fb: f at lo and hi; c: moment centre (any; one
+   ! near the root keeps its precision). err = |Q2/Q0-(Q1/Q0)**2|/(hi-lo)
+   ! vanishes for a pure pole.
+   pure subroutine global_ratio(f,fp,fa,fb,lo,hi,xn,wn,c,root,err)
+      real(dp),intent(in)::f(ng),fp(ng),fa,fb,lo,hi,xn(ng),wn(ng),c
+      real(dp),intent(out)::root,err
+      real(dp)::q0,q1,q2,e(ng),d
+      e=xn-c
+      q0=fb-fa-sum(wn*fp)
+      q1=(hi-c)*fb-(lo-c)*fa-sum(wn*(f+e*fp))
+      q2=(hi-c)**2*fb-(lo-c)**2*fa-sum(wn*e*(2*f+e*fp))
+      d=q1/q0;root=c+d
+      err=abs(q2/q0-d*d)/(hi-lo)
+   end subroutine
+
    pure subroutine rect_ratio(kind1,c,hs,hc,kr,eight,y0,yend,a,b,t,m,dd,de,sc)
       integer,intent(in)::kind1,kr,m
       real(dp),intent(in)::c,hs,hc,y0,yend,a,b,t
@@ -1420,40 +1273,6 @@ contains
       endif
    end function
 
-   ! asinh(s), s>=0, to ~1e-4 for singularity distances (only the rectangle
-   ! width depends on them): series below 1/2, else a polynomial logarithm.
-   elemental real(dp) function rasinh(s) result(y)
-      real(dp),intent(in)::s
-      real(dp)::q
-      if(s<.5_dp)then
-         q=s*s
-         y=s*(1+q*(-1._dp/6+q*(3._dp/40+q*(-5._dp/112+q*(35._dp/1152)))))
-      else
-         y=qlog(s+sqrt(1+s*s))
-      endif
-   end function
-
-   ! Natural logarithm to ~1e-5 absolute: exponent bits and a quintic in the
-   ! mantissa (Abramowitz and Stegun 4.1.44); no division.
-   elemental real(dp) function qlog(x) result(y)
-      real(dp),intent(in)::x
-      real(dp),parameter::ln2=log(2._dp)
-      integer(int64)::i
-      real(dp)::u
-      if(.not.(ieee64.and.x>=tiny(x).and.x<=huge(x)))then
-         y=log(x);return
-      endif
-      i=transfer(x,i)
-      u=transfer(ior(iand(i,4503599627370495_int64),4607182418800017408_int64),u)-1
-      y=(shiftr(i,52)-1023)*ln2+u*(.99949556_dp+u*(-.49190896_dp+u*(.28947478_dp+u*(-.13606275_dp+u*.03215845_dp))))
-   end function
-
-   ! asin(x), 0<=x<=1, to ~5e-5 (Abramowitz and Stegun 4.4.45).
-   elemental real(dp) function rasin(x) result(y)
-      real(dp),intent(in)::x
-      y=pi/2-sqrt(1-x)*(1.5707288_dp+x*(-.2121144_dp+x*(.0742610_dp-x*.0187293_dp)))
-   end function
-
    ! Natural logarithm to ~1e-9 relative: exponent bits, mantissa reduced to
    ! [sqrt(1/2),sqrt(2)], and the atanh series in z=(m-1)/(m+1), |z|<0.18.
    elemental real(dp) function rlog(x) result(y)
@@ -1491,19 +1310,6 @@ contains
             w=1/y;r=(x*w)*(w*w)
             y=y*(1+2*r)/(2+r)
          endif
-      endif
-   end function
-
-   ! x from a rectangle coordinate: X=k*x**2 near the parabola (series), else x
-   ! itself; -1 when X lies on the other side of the parabola.
-   elemental real(dp) function xof(c,series,k) result(x)
-      real(dp),intent(in)::c
-      logical,intent(in)::series
-      integer,intent(in)::k
-      x=c
-      if(series)then
-         x=-1
-         if(k*c>=0)x=sqrt(k*c)
       endif
    end function
 
@@ -1757,12 +1563,6 @@ contains
       w(1)=-(1._dp/6)*(p1*p2)*p3;w(2)=.5_dp*(p0*p2)*p3
       w(3)=-.5_dp*(p0*p1)*p3;w(4)=(1._dp/6)*(p0*p1)*p2
    end subroutine
-
-   !> Cubic Hermite on [0,1]: values p0,p1 and slopes m0,m1 at 0 and 1.
-   pure real(dp) function hermite(u,p0,m0,p1,m1)
-   real(dp),intent(in) :: u,p0,m0,p1,m1
-   hermite=p0*(2*u**3-3*u*u+1)+m0*(u**3-2*u*u+u)+p1*(3*u*u-2*u**3)+m1*(u**3-u*u)
-   end function hermite
 
    pure function cross(u,v) result(w)
    real(dp),intent(in) :: u(3),v(3)
