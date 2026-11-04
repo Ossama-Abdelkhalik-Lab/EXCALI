@@ -6,8 +6,11 @@ A zero-revolution root depends only on the Lancaster-Blanchard parameter lam
 and on the time relative to the parabolic time tp. All grids are uniform in
 tau = lam/(1+sqrt(1-lam**2)).
 
+Short-way ellipses toward tau -> 1 (tau in PP): tabp, split at v = pi/2; see
+short_way().
+
 Ellipse (t > tp), root v (half the eccentric-anomaly change), s = (tp/t)**(1/3),
-|tau| <= 0.9: tab(:,:,1) = (pi - v)/(s*ck) for s in [0, 1/2], ck = (K/tp)**(1/3)
+|tau| <= 0.9 (the solver uses it below tau = 0.75): tab(:,:,1) = (pi - v)/(s*ck) for s in [0, 1/2], ck = (K/tp)**(1/3)
 with the pole asymptote T ~ K/(pi-v)**3, K = pi*y(pi)**1.5/sqrt2, and
 tab(:,:,2) = v**2*T0'/(t - tp) for s in [1/2, 1], T0' = dT/d(v**2) at the
 parabola. Both tend to 1 at their ends (t -> infinity, t -> tp), and the
@@ -27,10 +30,10 @@ interpolated in mu at run time, |tau| <= TM:
   location) on a fine tau grid of MR_NC points;
   mr_v(:,:,k) = branch root v on tau x sigma, sigma = branch*sqrt(1-(t_min/t)**(1/3)).
 The starters only need to be within a few percent of the singularity
-distance, so their grids are coarse. mr_c is not a starter: it decides
+distance, so their grids are coarse. mr_c decides
 feasibility outside a 1e-6 margin, so it needs MR_NC >= 128 and the m = 5
 slice (worst relative error 1.04e-7 for m = 1..40 and sampled m to 1000,
-including m between slices; 4.4e-7 at m = 5 without that slice).
+including m between slices; 4.4e-7 at m = 5 when that slice is left out).
 
 Truth: bisection on EXCALI's T for the canonical geometry r1 = r2 = 1, with
 the parabolic series where the closed form cancels.
@@ -194,6 +197,48 @@ def zero_rev(n):
     return A, B
 
 
+PP = (0.75, 1 - 1e-6)                # tau range of the short-way table tabp
+
+
+def zp(tau):
+    """Grid coordinate of tabp: 1 - sqrt(1 - tau), fine as tau -> 1."""
+    return 1 - np.sqrt(1 - tau)
+
+
+def half_scales(lam):
+    """tp, T_half = T(pi/2) and K = pi*y(pi)**1.5/sqrt2 for the canonical geometry."""
+    a, b, y0, yend, tp = geom(lam)
+    ypi = np.where(b >= 0, y0 + 2 * b, yend)
+    yh = np.where(b >= 0, y0 + b, yend - b)
+    return tp, np.sqrt(yh) * (yh * PI / (2 * S2) + a), PI * ypi ** 1.5 / S2
+
+
+def short_way(n):
+    """Short-way ellipses toward tau -> 1, split at v = pi/2 (T_half):
+    tabp(:,:,1) = (pi-v)/(s1*(K/T_half)**(1/3)) on s1 = (T_half/t)**(1/3), and
+    tabp(:,:,2) = v**2/(s2*(s2+2*e0)) on s2 = (t-tp)/(T_half-tp), e0 = tp/(T_half-tp),
+    which absorbs the sqrt(y) branch point's approach to the parabola."""
+    tau = 1 - (1 - np.linspace(zp(PP[0]), zp(PP[1]), n)) ** 2; lam = 2 * tau / (1 + tau * tau)
+    L, S = np.meshgrid(lam, np.linspace(0, 1, n), indexing='ij')
+    tp, th, K = half_scales(L); a, b, y0, yend, _ = geom(L)
+    s1 = np.maximum(S, 1e-7)
+    A = (PI - root_t(L, th / s1 ** 3)) / (s1 * np.cbrt(K / th))
+    s2 = np.clip(S, 1e-7, 1 - 1e-12); e0 = tp / (th - tp)
+    B = root_t(L, tp + s2 * (th - tp)) ** 2 / (s2 * (s2 + 2 * e0))
+    return A, B
+
+
+def root_t(lam, t):
+    """Elliptic root v of T(v) = t by bisection."""
+    a, b, y0, yend, tp = geom(lam)
+    lo = np.zeros_like(lam); hi = np.full(lam.shape, PI)
+    for _ in range(90):
+        mid = 0.5 * (lo + hi)
+        f = T_v(mid, a, b, y0, yend) < t
+        lo = np.where(f, mid, lo); hi = np.where(f, hi, mid)
+    return 0.5 * (lo + hi)
+
+
 def ell_scales(lam):
     """ck = (K/tp)**(1/3) (pole asymptote) and tp/T0' (parabola), both scale-free."""
     a, b, y0, yend, tp = geom(lam)
@@ -256,7 +301,7 @@ def arr(f, name, M):
         f.write("/\n")
 
 
-def write(out, n, A, B, HS, HL, HX, V, C, VS):
+def write(out, n, A, B, PA, PB, HS, HL, HX, V, C, VS):
     def block(f, name, mats):
         arr(f, name, np.stack(mats, axis=-1))
     with open(out, 'w') as f:
@@ -273,6 +318,11 @@ def write(out, n, A, B, HS, HL, HX, V, C, VS):
         f.write("   integer,private::ti_,tj_\n")
         f.write(f"   real(dp),parameter::tabh_s0={SH[0]}_dp,tabh_s1={SH[1]:.17e}_dp,tabh_ps={PS[0]}_dp,tabh_pl={PL[0]}_dp,tabh_px={PX}_dp\n")
         block(f, "tab", (A, B))
+        f.write(f"   ! Short-way ellipses, tau in [{PP[0]},1-{1-PP[1]:.0e}], grid uniform in 1-sqrt(1-tau), split\n")
+        f.write("   ! at v=pi/2: tabp(:,:,1)=(pi-v)/(s1*(K/Th)**(1/3)), s1=(Th/t)**(1/3), Th=T(pi/2);\n")
+        f.write("   ! tabp(:,:,2)=v**2/(s2*(s2+2*e0)), s2=(t-tp)/(Th-tp), e0=tp/(Th-tp).\n")
+        f.write(f"   real(dp),parameter::tabp_z0={zp(PP[0]):.17e}_dp,tabp_z1={zp(PP[1]):.17e}_dp\n")
+        block(f, "tabp", (PA, PB))
         block(f, "tabh", (HS, HL, HX))
         f.write(f"   ! Multiple revolutions (slices in mu = 1/m, last ~infinity): mr_v(tau,sigma,k) branch root,\n")
         f.write(f"   ! mr_c(tau,k) = cbrt(t_min/m)/sqrt(s_L), mr_s(tau,k) = v*; |tau| <= {TM}.\n")
@@ -285,6 +335,7 @@ if __name__ == "__main__":
     n = int(sys.argv[1]) if len(sys.argv) > 1 else 32
     out = sys.argv[2] if len(sys.argv) > 2 else "src/excali_tables.inc"
     A, B = zero_rev(n)
+    PA, PB = short_way(n)
     HS, HL, HX = hyperbolic(n)
     V, C, VS = multi_rev(MR_NT)
-    write(out, n, A, B, HS, HL, HX, V, C, VS)
+    write(out, n, A, B, PA, PB, HS, HL, HX, V, C, VS)

@@ -24,7 +24,7 @@ elseif(EXCALI_PGO STREQUAL "USE")
 elseif(NOT EXCALI_PGO STREQUAL "OFF")
     message(FATAL_ERROR "EXCALI_PGO must be OFF, GENERATE or USE")
 endif()
-# Namespace only generated copies; no numerical edits to imported files.
+# Namespaced generated copies; the imported files stay byte for byte.
 foreach(pair ser vect)
     file(READ "${CMAKE_SOURCE_DIR}/original/exact_${pair}.F90" source)
     if(pair STREQUAL "ser")

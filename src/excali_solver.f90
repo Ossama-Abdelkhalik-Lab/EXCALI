@@ -634,6 +634,7 @@ contains
       if(statc(j)/=-4.or.nrev(j)>0)cycle
       call table_root(kc(j),cc(j),ddc(j),wbc(j),nearc(j),dtc(j),xc(j))
       tauc(j)=merge(abs(cc(j)),1._dp,.not.nearc(j))
+      if(kc(j)>0.and.wbc(j)>0)tauc(j)=0          ! short-way table: 3 nodes
       fast(j)=xc(j)>0.or.kc(j)==0
    enddo
    do j=1,nc
@@ -766,7 +767,18 @@ contains
          else
             dc=sqrt(g%q*g%q*(g%s1+g%s2)**2+4*g%p*g%p*g%ss*g%ss);sl=(g%rn1+g%rn2+dc)/2   ! chord, semiperimeter
             tau=g%a/(sqrt2*sl)/(1+sqrt(dc/sl))
-            if(k>0)then
+            if(k>0.and.tau>=.75_dp)then
+               ! Short-way table tabp (table_vp), split at Th=T(pi/2): s1=(Th/t)**(1/3)
+               ! with scale (K/Th)**(1/3) (wb=1), or s2=(t-tp)/(Th-tp) with scale
+               ! s2*(s2+2*tp/(Th-tp)) (wb=2).
+               sw=g%y0+g%b
+               sw=sqrt(sw)*(sw*(pi/(2*sqrt2))+g%a)          ! Th
+               if(g%t>=sw)then
+                  wb=1;u=rcbrt(sw/g%t);dt=rcbrt(pi*g%ypi*sqrt(g%ypi)/(sqrt2*sw))
+               else
+                  wb=2;u=(g%t-tp)/(sw-tp);dt=u*(u+2*tp/(sw-tp))
+               endif
+            elseif(k>0)then
                ! Elliptic table scale (table_v): (K/tp)**(1/3), K=pi*y(pi)**1.5/sqrt2,
                ! for phi<=1/2, else (t-tp)/T0', T0'=dT/d(v**2) at the parabola.
                if(u<=.5_dp)then
@@ -789,7 +801,11 @@ contains
          if(near)then
             if(u*k>0)x=sqrt(abs(u))
          elseif(k>0)then
-            x=table_v(tau,u,dt)
+            if(wb>0)then
+               x=table_vp(tau,u,dt,nint(wb))
+            else
+               x=table_v(tau,u,dt)
+            endif
             if(x>.75_dp*pi)then
                x=pi-x;k=2
             endif
@@ -1357,6 +1373,31 @@ contains
       u=(ws(1)*r(1)+ws(2)*r(2))+(ws(3)*r(3)+ws(4)*r(4))
       if(h==1)then
          v=pi-phi*sc*u
+      else
+         v=sqrt(max(u*sc,0._dp))
+      endif
+      if(.not.(v>0.and.v<pi))v=0
+   end function
+
+   ! Short-way elliptic root v from tabp at tau in [0.75,1-1e-6] (grid uniform in
+   ! 1-sqrt(1-tau)) and s in [0,1]: side 1 (t>=T(pi/2)) v=pi-s*sc*A, side 2
+   ! v=sqrt(B*sc) (sc from table_coordinates). 0 outside the table.
+   pure real(dp) function table_vp(tau,s,sc,side) result(v)
+      real(dp),intent(in)::tau,s,sc
+      integer,intent(in)::side
+      real(dp)::u,wt(4),ws(4),r(4)
+      integer::i,j
+      v=0
+      u=1-sqrt(1-tau)
+      if(.not.(u<=tabp_z1.and.s>=0.and.s<=1))return
+      u=(u-tabp_z0)*((tab_n-1)/(tabp_z1-tabp_z0))
+      i=min(max(int(u)-1,0),tab_n-4);call lagrange4(u-i,wt)
+      u=s*(tab_n-1)
+      j=min(max(int(u)-1,0),tab_n-4);call lagrange4(u-j,ws)
+      r=wt(1)*tabp(i+1,j+1:j+4,side)+wt(2)*tabp(i+2,j+1:j+4,side)+wt(3)*tabp(i+3,j+1:j+4,side)+wt(4)*tabp(i+4,j+1:j+4,side)
+      u=(ws(1)*r(1)+ws(2)*r(2))+(ws(3)*r(3)+ws(4)*r(4))
+      if(side==1)then
+         v=pi-s*sc*u
       else
          v=sqrt(max(u*sc,0._dp))
       endif

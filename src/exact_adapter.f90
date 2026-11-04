@@ -32,7 +32,7 @@ contains
          status=-2;half=-1;return
       endif
       if(a<1e-4_dp)half=1
-      status=-6 ! unsupported regime: never silently solve M=0 for M>0
+      status=-6 ! the original kernels solve zero-revolution ellipses only
       if(m/=0)return
       h=h*(d/a)
       if(vector)then

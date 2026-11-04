@@ -1,7 +1,7 @@
 ! Training workload for profile-guided builds (EXCALI_PGO=GENERATE): random
 ! transfers across the solver's regimes. Times are drawn relative to the
 ! parabolic time, so short/long-way ellipses, hyperbolas, near-parabolic
-! arcs and multi-revolution branches (feasible or not) all occur.
+! arcs and multi-revolution branches (feasible and infeasible) all occur.
 program pgo_train
    use iso_fortran_env, only: real64
    use excali_solver, only: excali_solve
