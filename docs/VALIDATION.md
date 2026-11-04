@@ -410,5 +410,17 @@ Zero-revolution ellipses take one path: geometry → starter → one fixed Gauss
   - Starter error: at most 3.1e-5 of `min(v, pi-v)` over the whole range, so these ellipses use 3 nodes.
   - Truth sets: identical or better in every category. Stress sets: 0 failures.
   - `excali_batch` on the 70,000 hard elliptic truth cases: 187 → 147 ns per case (the original EXCALI: 140 ns). The short-way degenerate ellipses that used the 24-point Y formula now take the single path.
-  - The same parametrization fails on the long way (`tau -> -1`). There `T` has a plateau near `pi*|b|^1.5/4`, below which `pi-v` is a universal function of `s` and above which `(pi-v)/eta` is, with a thin transition layer between them. These 413 of about 106,000 ellipses (truth plus stress sets) keep the region formula. A cubic model of the transition, `d^3/2 + (t/|b|^1.5 - pi/4) d^2 - 3*pi*eta^2/8 = 0` with `d = pi-v`, is a candidate starter (not built).
-- **Size.** `src/excali_solver.f90` is 1,637 lines, against 1,573 before. The additional code is the short-way table lookup and its coordinates, the 24-point constants, the per-side table scale and the 8-node widening.
+- **Long-way closed-form starter (`tau < -0.9`).** As `tau -> -1`, `T/|b|^1.5` has a plateau at `pi/4` between a body, where `d = pi - v` depends only on `th = t/|b|^1.5`, and a pole layer of width `eta = sqrt(2*y_end/|b|)`. `long_d` uses three forms:
+  - the pole layer `(pi/4)((1+eta^2/d^2)^1.5-1) = th - pi/4`, solved exactly when it gives `d < 2*eta`;
+  - the transition cubic `d^3/2 + (th-pi/4) d^2 = 3*pi*eta^2/8`, in the scaled form `x^3/2 + chi x^2 = 3*pi/8` (`d = eta^(2/3) x`), solved through `1/x` for `chi > 0` and directly otherwise by trigonometric or hyperbolic formulas (cancellation-free), when it gives `d < 0.1`;
+  - otherwise the body limit from a 64-point table (`tabb`).
+
+  Results:
+  - Starter error at most 6.4% of `min(v, pi-v)` for `tau` from -0.9 to -0.999999; these cases use 8 nodes at bound/4.
+  - Short-way `tau > 1-1e-6` clamps `tabp` at its edge, also 8 nodes at bound/4.
+  - No zero-revolution ellipse in the truth sets or the 40,000-case stress set reaches the region formulas, so their elliptic dispatch was removed.
+  - Truth sets equal or better in every category, both stress sets 0 failures, all tests pass.
+  - `excali_batch` on the hard elliptic set: 145 ns per case (original EXCALI 140 ns).
+  - Earlier attempts that failed: the `v = pi/2` split on the long way (errors to 1e6), and a matched composite with a correction table (Cardano cancellation deep in the layer).
+- **benchmark_mixed** (final, 3 interleaved runs): zero failures; maximum errors equal or lower in every elliptic class. Overall time is 1.02 of the original (174 against 171 ns); elliptic classes 1.02–1.07. The controlled circular-transfer timing is equal (153 ns), so part of this is code layout between separately built binaries.
+- **Size.** `src/excali_solver.f90` is 1,687 lines, against 1,573 before. The additions are the two table lookups (`table_vp`, `long_d` with `depressed_max`), the 24-point constants, the per-side table scale and the node widening. The removals are the elliptic region dispatch, now unreachable.

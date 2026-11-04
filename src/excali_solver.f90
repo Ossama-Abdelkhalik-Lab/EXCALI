@@ -344,53 +344,35 @@ contains
 
 
 
-      ! Zero revolutions: the region decides the coordinate, in which the
-      ! root's neighbourhood is free of singularities for every geometry:
-      !  ellipse, root v>=2 (t>=T(2)):  d=pi-v on [-1/2,pi-1.8] (kind 2), or
-      !    for b/(y0+b)<-1/2, where the sqrt(y) branch points close in on
-      !    the pole, zeta about pi (kind 3);
-      !  ellipse, root v<2: Y=sqrt(y) up to v=2.2 for b/(y0+b)>0.7 (kind 1),
-      !    else X=+-v**2 on [Xa,2.2**2] (kind 6);
-      !  hyperbola: Y on [0,0.9*sqrt(y(pi))] when b>0 and T there exceeds t
-      !    (kind 1); else X for w<=1.75 (kind 6); else w around the
-      !    asymptotic root (kind 7).
+      ! Zero-revolution hyperbolas off the tables (every ellipse has a table or
+      ! closed-form starter): the region decides the coordinate, in which the
+      ! root's neighbourhood is free of singularities for every geometry. Y on
+      ! [0,0.9*sqrt(y(pi))] when b>0 and T there exceeds t (kind 1); else X for
+      ! w<=1.75 (kind 6); else w around the asymptotic root (kind 7).
       logical function fixed_root() result(ok)
-         real(dp)::lo2,hi2,lr,tz,fz,fpz,cc,e
+         real(dp)::lo2,hi2,tz,fz,fpz,cc,e
          integer::kz
-         s3=cbrt_c(tref/t);lr=b/(y0+b)
-         if(t>tp)then
-            call zeval(5,2._dp,fz,fpz,tz)                    ! T(v=2)
+         ok=.false.
+         if(t>tp)return
+         s3=cbrt_c(tref/t)
+         kz=0
+         if(b>0)then
+            hi2=.9_dp*sqrt(ypi)
+            call zeval(1,hi2,fz,fpz,tz)
+            if(tz>t)then
+               kz=1;lo2=0
+            endif
+         endif
+         if(kz==0)then
+            call zeval(7,1.75_dp,fz,fpz,tz)                  ! T(w=1.75)
             if(t>=tz)then
-               if(lr>=-.5_dp)then
-                  kz=2;lo2=-.5_dp;hi2=pi-1.8_dp
-               else
-                  kz=3;s0=sqrt(yend/(-2*b));lo2=0;hi2=asinh(sin((pi-1.8_dp)/2)/s0)
-               endif
-            elseif(lr>.7_dp)then
-               kz=1;lo2=0;hi2=sqrt(y0+2*b*sin(1.1_dp)**2)
-            else
                kz=6;lo2=xlow();hi2=2.2_dp**2
-            endif
-         else
-            kz=0
-            if(b>0)then
-               hi2=.9_dp*sqrt(ypi)
-               call zeval(1,hi2,fz,fpz,tz)
-               if(tz>t)then
-                  kz=1;lo2=0
-               endif
-            endif
-            if(kz==0)then
-               call zeval(7,1.75_dp,fz,fpz,tz)               ! T(w=1.75)
-               if(t>=tz)then
-                  kz=6;lo2=xlow();hi2=2.2_dp**2
-               else
-                  ! Large w: T ~ sqrt2*c*sqrt(c-b*E/2)/E, E=exp(w), c=y0+b.
-                  kz=7;cc=y0+b
-                  e=(-cc*cc*b+sqrt((cc*cc*b)**2+8*t*t*cc**3))/(2*t*t)
-                  lo2=max(1.5_dp,log(e)-2);hi2=lo2+4
-                  if(b>0)hi2=min(hi2,2*asinh(sqrt(y0/(2*b)))-.5_dp)
-               endif
+            else
+               ! Large w: T ~ sqrt2*c*sqrt(c-b*E/2)/E, E=exp(w), c=y0+b.
+               kz=7;cc=y0+b
+               e=(-cc*cc*b+sqrt((cc*cc*b)**2+8*t*t*cc**3))/(2*t*t)
+               lo2=max(1.5_dp,log(e)-2);hi2=lo2+4
+               if(b>0)hi2=min(hi2,2*asinh(sqrt(y0/(2*b)))-.5_dp)
             endif
          endif
          ok=ratio_root(kz,lo2,hi2)
@@ -635,14 +617,16 @@ contains
       call table_root(kc(j),cc(j),ddc(j),wbc(j),nearc(j),dtc(j),xc(j))
       tauc(j)=merge(abs(cc(j)),1._dp,.not.nearc(j))
       if(kc(j)>0.and.wbc(j)>0)tauc(j)=0          ! short-way table: 3 nodes
+      if(kc(j)>0.and.(wbc(j)>2.or.cc(j)>1-1e-6_dp))tauc(j)=2   ! closed-form or clamped: R/4
       fast(j)=xc(j)>0.or.kc(j)==0
    enddo
    do j=1,nc
       if(.not.fast(j).or.kc(j)==0)cycle
       call fast_coordinate(kc(j),xc(j),nrev(j),gc(j)%b,wbc(j),lbc(j),ubc(j),kd(j),cc(j),elc,eightc(j),hsc(j),hcc(j))
-      ! Ellipses at |tau|>=0.75 or from the near-parabolic series: 8 nodes, R/8.
+      ! Ellipses at |tau|>=0.75 or from the near-parabolic series: 8 nodes, R/8;
+      ! the long-way closed form (within 6.4%) and tau>1-1e-6: 8 nodes, R/4.
       if(nrev(j)==0.and.kd(j)>0.and.tauc(j)>=.75_dp)then
-         elc=elc*32;eightc(j)=.true.
+         elc=elc*merge(64,32,tauc(j)>1.5_dp);eightc(j)=.true.
       endif
       fast(j)=elc>0;krc(j)=kexp(elc)
    enddo
@@ -778,6 +762,9 @@ contains
                else
                   wb=2;u=(g%t-tp)/(sw-tp);dt=u*(u+2*tp/(sw-tp))
                endif
+            elseif(k>0.and.tau<-.9_dp)then
+               ! Long way toward tau -> -1 (long_d): th=t/|b|**1.5, eta**2=2*yend/|b|.
+               wb=3;u=g%t/((-g%b)*sqrt(-g%b));dt=sqrt(2*g%yend/(-g%b))
             elseif(k>0)then
                ! Elliptic table scale (table_v): (K/tp)**(1/3), K=pi*y(pi)**1.5/sqrt2,
                ! for phi<=1/2, else (t-tp)/T0', T0'=dT/d(v**2) at the parabola.
@@ -800,6 +787,13 @@ contains
          if(k==0)return
          if(near)then
             if(u*k>0)x=sqrt(abs(u))
+         elseif(k>0.and.wb>2)then
+            x=long_d(u,dt)                      ! pi-v
+            if(x>.25_dp*pi)then
+               x=pi-x
+            else
+               k=2
+            endif
          elseif(k>0)then
             if(wb>0)then
                x=table_vp(tau,u,dt,nint(wb))
@@ -1388,8 +1382,8 @@ contains
       real(dp)::u,wt(4),ws(4),r(4)
       integer::i,j
       v=0
-      u=1-sqrt(1-tau)
-      if(.not.(u<=tabp_z1.and.s>=0.and.s<=1))return
+      u=min(1-sqrt(1-tau),tabp_z1)              ! clamped beyond tau=1-1e-6
+      if(.not.(s>=0.and.s<=1))return
       u=(u-tabp_z0)*((tab_n-1)/(tabp_z1-tabp_z0))
       i=min(max(int(u)-1,0),tab_n-4);call lagrange4(u-i,wt)
       u=s*(tab_n-1)
@@ -1402,6 +1396,62 @@ contains
          v=sqrt(max(u*sc,0._dp))
       endif
       if(.not.(v>0.and.v<pi))v=0
+   end function
+
+   ! Long-way elliptic root as d=pi-v toward tau -> -1, th=t/|b|**1.5,
+   ! eta**2=2*yend/|b|, within 6.4% of min(v,d). With dl=th-pi/4 (the plateau
+   ! pi/4): the pole layer (pi/4)((1+eta**2/d**2)**1.5-1)=dl when that gives
+   ! d<2*eta; else the transition d**3/2+dl*d**2=3*pi*eta**2/8 (linear body,
+   ! linearized layer) when that gives d<0.1; else the body limit from tabb.
+   pure real(dp) function long_d(th,eta) result(d)
+      real(dp),intent(in)::th,eta
+      real(dp)::dl,x,e23,chi,u,wt(4),h
+      integer::j
+      dl=th-pi/4
+      if(dl>0)then
+         x=4*dl/pi
+         if(x<1e-3_dp)then
+            x=x*(2._dp/3-x*(1._dp/9-x*(4._dp/81)))     ! (1+x)**(2/3)-1
+         else
+            x=exp(log1p_c(x)*(2._dp/3))-1
+         endif
+         d=eta/sqrt(x)
+         if(d<2*eta)return
+      endif
+      e23=cbrt_c(eta*eta);chi=dl/e23
+      if(chi>0)then
+         ! 1/x is the largest root of w**3-(8chi/(3pi))w-4/(3pi)=0
+         x=1/depressed_max(-8*chi/(3*pi),-4/(3*pi))
+      elseif(chi<0)then
+         x=depressed_max(-4*chi*chi/3,16*chi**3/27-3*pi/4)-2*chi/3
+      else
+         x=cbrt_c(3*pi/4)
+      endif
+      d=e23*x
+      if(d<.1_dp)return
+      u=min(max((th-1._dp/3)/(pi/4-1._dp/3),0._dp),1._dp)
+      h=merge(u/.5_dp,(u-.5_dp)/.5_dp,u<=.5_dp)*(tabb_n-1)
+      j=min(max(int(h)-1,0),tabb_n-4);call lagrange4(h-j,wt)
+      if(u<=.5_dp)then
+         h=wt(1)*tabb(j+1,1)+wt(2)*tabb(j+2,1)+wt(3)*tabb(j+3,1)+wt(4)*tabb(j+4,1)
+         d=pi-sqrt(max(h*u,0._dp))
+      else
+         h=wt(1)*tabb(j+1,2)+wt(2)*tabb(j+2,2)+wt(3)*tabb(j+3,2)+wt(4)*tabb(j+4,2)
+         d=h*(1-u)
+      endif
+   end function
+
+   ! Largest real root of y**3+p*y+q=0 for p<0, in the trigonometric or
+   ! hyperbolic form (cancellation-free).
+   pure real(dp) function depressed_max(p,q) result(y)
+      real(dp),intent(in)::p,q
+      real(dp)::m,c
+      m=sqrt(-p/3);c=-q/(2*m**3)
+      if(abs(c)<=1)then
+         y=2*m*cos(acos(c)/3)
+      else
+         y=sign(2*m*cosh(log(abs(c)+sqrt(c*c-1))/3),c)
+      endif
    end function
 
    ! Hyperbolic roots from tabh (see excali_tables.inc) at tau and u=t/tp, on

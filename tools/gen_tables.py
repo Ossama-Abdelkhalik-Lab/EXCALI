@@ -228,6 +228,29 @@ def short_way(n):
     return A, B
 
 
+NB = 64
+
+
+def P_body(d):
+    """T/|b|**1.5 near the long-way limit y_end -> 0, d = pi - v."""
+    return (PI - d + np.sin(d) * np.cos(d)) / (4 * np.cos(d / 2) ** 3) - np.sin(d / 2)
+
+
+def long_body(nb=NB):
+    """Long-way limit tau -> -1: d = pi - v from P_body(d) = t/|b|**1.5 in
+    u = (t/|b|**1.5 - 1/3)/(pi/4 - 1/3): tabb(:,1) = v**2/u on u in [0,1/2],
+    tabb(:,2) = d/(1-u) on [1/2,1] (P_body is 1/3 at the parabola, pi/4 at the pole)."""
+    ul = np.clip(np.linspace(0, .5, nb), 1e-6, None); uh = np.clip(np.linspace(.5, 1, nb), None, 1 - 1e-6)
+    def inv(th):
+        lo = np.zeros_like(th); hi = np.full(th.shape, PI - 1e-12)
+        for _ in range(90):
+            m = .5 * (lo + hi); f = P_body(m) > th
+            lo = np.where(f, m, lo); hi = np.where(f, hi, m)
+        return .5 * (lo + hi)
+    vl = PI - inv(1 / 3 + ul * (PI / 4 - 1 / 3)); dh = inv(1 / 3 + uh * (PI / 4 - 1 / 3))
+    return np.stack([vl ** 2 / ul, dh / (1 - uh)], axis=-1)
+
+
 def root_t(lam, t):
     """Elliptic root v of T(v) = t by bisection."""
     a, b, y0, yend, tp = geom(lam)
@@ -301,7 +324,7 @@ def arr(f, name, M):
         f.write("/\n")
 
 
-def write(out, n, A, B, PA, PB, HS, HL, HX, V, C, VS):
+def write(out, n, A, B, PA, PB, LB, HS, HL, HX, V, C, VS):
     def block(f, name, mats):
         arr(f, name, np.stack(mats, axis=-1))
     with open(out, 'w') as f:
@@ -323,6 +346,10 @@ def write(out, n, A, B, PA, PB, HS, HL, HX, V, C, VS):
         f.write("   ! tabp(:,:,2)=v**2/(s2*(s2+2*e0)), s2=(t-tp)/(Th-tp), e0=tp/(Th-tp).\n")
         f.write(f"   real(dp),parameter::tabp_z0={zp(PP[0]):.17e}_dp,tabp_z1={zp(PP[1]):.17e}_dp\n")
         block(f, "tabp", (PA, PB))
+        f.write("   ! Long-way limit tau -> -1, body d=pi-v from T/|b|**1.5=th, u=(th-1/3)/(pi/4-1/3):\n")
+        f.write("   ! tabb(:,1)=v**2/u on [0,1/2], tabb(:,2)=d/(1-u) on [1/2,1].\n")
+        f.write(f"   integer,parameter::tabb_n={LB.shape[0]}\n")
+        arr(f, "tabb", LB)
         block(f, "tabh", (HS, HL, HX))
         f.write(f"   ! Multiple revolutions (slices in mu = 1/m, last ~infinity): mr_v(tau,sigma,k) branch root,\n")
         f.write(f"   ! mr_c(tau,k) = cbrt(t_min/m)/sqrt(s_L), mr_s(tau,k) = v*; |tau| <= {TM}.\n")
@@ -336,6 +363,7 @@ if __name__ == "__main__":
     out = sys.argv[2] if len(sys.argv) > 2 else "src/excali_tables.inc"
     A, B = zero_rev(n)
     PA, PB = short_way(n)
+    LB = long_body()
     HS, HL, HX = hyperbolic(n)
     V, C, VS = multi_rev(MR_NT)
-    write(out, n, A, B, PA, PB, HS, HL, HX, V, C, VS)
+    write(out, n, A, B, PA, PB, LB, HS, HL, HX, V, C, VS)
