@@ -491,19 +491,19 @@ contains
          integer,intent(in)::kz
          real(dp),intent(in)::z
          real(dp),intent(out)::f,fp,tt
-         real(dp)::q,h1,h2,xx,fd(0:3),dt,sg,dd(0:3),sh,ch
+         real(dp)::q,u1,u2,xx,fd(0:3),dt,sg,dd(0:3),sh,ch
          select case(kz)
           case(1)
             if(z==0)then
                tt=0;f=-1/t;fp=0;return
             endif
-            q=(z*z-y0)/(2*b);h1=sqrt(abs(q));h2=sqrt(1-q)
+            q=(z*z-y0)/(2*b);u1=sqrt(abs(q));u2=sqrt(1-q)
             if(q>=0)then
-               xx=2*asin(h1);call f_derivs(xx,1,0,fd,2*h1*h2,1-2*q)
-               dt=fd(1)/(h1*h2)                         ! dF/dq
+               xx=2*asin(u1);call f_derivs(xx,1,0,fd,2*u1*u2,1-2*q)
+               dt=fd(1)/(u1*u2)                         ! dF/dq
             else
-               xx=2*asinh(h1);call f_derivs(xx,-1,0,fd,2*h1*h2,1-2*q)
-               dt=-fd(1)/(h1*h2)
+               xx=2*asinh(u1);call f_derivs(xx,-1,0,fd,2*u1*u2,1-2*q)
+               dt=-fd(1)/(u1*u2)
             endif
             tt=z*(z*z*fd(0)+a)
             dt=3*z*z*fd(0)+a+z**4*dt/b
@@ -532,13 +532,13 @@ contains
             call sincos_half(z,sh,ch);call time_derivs(z,2,m,y0,yend,a,b,dd,sh,ch)
             dt=dd(1)
           case(3,4)
-            call shch(z,sh,ch);h1=s0*sh;h2=sqrt((1-h1)*(1+h1))
+            call shch(z,sh,ch);u1=s0*sh;u2=sqrt((1-u1)*(1+u1))
             if(kz==3)then
-               call time_derivs(2*asin(h1),2,m,y0,yend,a,b,dd,h1,h2)
+               call time_derivs(2*asin(u1),2,m,y0,yend,a,b,dd,u1,u2)
             else
-               call time_derivs(2*asin(h1),1,m,y0,yend,a,b,dd,h1,h2)
+               call time_derivs(2*asin(u1),1,m,y0,yend,a,b,dd,u1,u2)
             endif
-            dt=dd(1)*2*s0*ch/h2
+            dt=dd(1)*2*s0*ch/u2
           case default
             call sincos_half(z,sh,ch);call time_derivs(z,1,m,y0,yend,a,b,dd,sh,ch)
             dt=dd(1)
@@ -586,91 +586,91 @@ contains
    ! location and branch root); one 8-node rectangle whose width is at most
    ! 1/16 of a lower bound on the distance to every singularity, so that it
    ! is final; the general path for anything it does not certify; velocities.
-   subroutine solve_chunk(nc,r1,r2,tof,direction,v1,v2,status,half,nrev,branch,plane_normal)
+   subroutine solve_chunk(nc,r1c,r2c,tofc,dirc,v1c,v2c,statc,halfc,nrev,branch,pnormal)
    integer,intent(in)   :: nc
-   real(dp),intent(in)  :: r1(3,nc),r2(3,nc),tof(nc)
-   integer,intent(in)   :: direction(nc),nrev(nc),branch(nc)
-   real(dp),intent(out) :: v1(3,nc),v2(3,nc)
-   integer,intent(out)  :: status(nc),half(nc)
-   real(dp),optional,intent(in) :: plane_normal(3)
-   type(frame) :: g(nb)
-   real(dp) :: x(nb),c(nb),hs(nb),hc(nb),wb(nb),lo(nb),hi(nb),dd(nb),de(nb),yy(nb),el,tp,dc,sl
-   integer :: k(nb),kd(nb),kr(nb),j
-   logical :: fast(nb),sc(nb),near(nb),trig(nb),eight(nb)
+   real(dp),intent(in)  :: r1c(3,nc),r2c(3,nc),tofc(nc)
+   integer,intent(in)   :: dirc(nc),nrev(nc),branch(nc)
+   real(dp),intent(out) :: v1c(3,nc),v2c(3,nc)
+   integer,intent(out)  :: statc(nc),halfc(nc)
+   real(dp),optional,intent(in) :: pnormal(3)
+   type(frame) :: gc(nb)
+   real(dp) :: xc(nb),cc(nb),hsc(nb),hcc(nb),wbc(nb),lbc(nb),ubc(nb),ddc(nb),dec(nb),yyc(nb),elc,vsc,chord,semi
+   integer :: kc(nb),kd(nb),krc(nb),j
+   logical :: fast(nb),scc(nb),nearc(nb),trig(nb),eightc(nb)
    ! Stage 1: geometry and the table coordinates (multiple revolutions: the
    ! tables themselves).
    do j=1,nc
-      fast(j)=.false.;near(j)=.false.;half(j)=0;status(j)=-1
-      if(abs(direction(j))/=1.or.nrev(j)<0.or.abs(branch(j))/=1.or..not.(tof(j)>0) &
-         .or..not.ieee_is_finite(tof(j)))cycle
-      call geometry(r1(:,j),r2(:,j),tof(j),direction(j),g(j),status(j),half(j),plane_normal)
-      if(status(j)/=-4)cycle
-      lo(j)=0;hi(j)=pi;fast(j)=.true.
+      fast(j)=.false.;nearc(j)=.false.;halfc(j)=0;statc(j)=-1
+      if(abs(dirc(j))/=1.or.nrev(j)<0.or.abs(branch(j))/=1.or..not.(tofc(j)>0) &
+         .or..not.ieee_is_finite(tofc(j)))cycle
+      call geometry(r1c(:,j),r2c(:,j),tofc(j),dirc(j),gc(j),statc(j),halfc(j),pnormal)
+      if(statc(j)/=-4)cycle
+      lbc(j)=0;ubc(j)=pi;fast(j)=.true.
       if(nrev(j)==0)then
-         call table_coordinates(g(j),k(j),c(j),dd(j),wb(j),near(j))
+         call table_coordinates(gc(j),kc(j),cc(j),ddc(j),wbc(j),nearc(j))
       else
          ! Every ellipse through both points has a>=s/2, so T > m*2*pi*(s/2)**1.5
          ! (within 31% of the minimum time) rejects most infeasible times.
-         dc=sqrt((g(j)%rn1-g(j)%rn2)**2+4*g(j)%rn1*g(j)%rn2*g(j)%ss**2);sl=(g(j)%rn1+g(j)%rn2+dc)/2
-         status(j)=5
-         if(g(j)%t>=nrev(j)*pi*sl*sqrt(sl)/sqrt2*(1-1e-12_dp)) &
-            call mrev_table(g(j)%a/(sqrt2*sl)/(1+sqrt(dc/sl)),sl,g(j)%t,nrev(j),branch(j),x(j),tp,status(j))
-         fast(j)=status(j)==1;k(j)=1
-         if(status(j)/=5)status(j)=-4
+         chord=sqrt((gc(j)%rn1-gc(j)%rn2)**2+4*gc(j)%rn1*gc(j)%rn2*gc(j)%ss**2);semi=(gc(j)%rn1+gc(j)%rn2+chord)/2
+         statc(j)=5
+         if(gc(j)%t>=nrev(j)*pi*semi*sqrt(semi)/sqrt2*(1-1e-12_dp)) &
+            call mrev_table(gc(j)%a/(sqrt2*semi)/(1+sqrt(chord/semi)),semi,gc(j)%t,nrev(j),branch(j),xc(j),vsc,statc(j))
+         fast(j)=statc(j)==1;kc(j)=1
+         if(statc(j)/=5)statc(j)=-4
          if(branch(j)<0)then
-            hi(j)=tp
+            ubc(j)=vsc
          else
-            lo(j)=tp
+            lbc(j)=vsc
          endif
-         if(x(j)>.75_dp*pi)then                    ! distance from the upper pole
-            el=lo(j);lo(j)=pi-hi(j);hi(j)=pi-el;x(j)=pi-x(j);k(j)=2
+         if(xc(j)>.75_dp*pi)then                    ! distance from the upper pole
+            elc=lbc(j);lbc(j)=pi-ubc(j);ubc(j)=pi-elc;xc(j)=pi-xc(j);kc(j)=2
          endif
       endif
    enddo
    ! Stage 2: zero-revolution table starters, then the rectangle's
    ! coordinate and width.
    do j=1,nc
-      if(status(j)/=-4.or.nrev(j)>0)cycle
-      call table_root(k(j),c(j),dd(j),wb(j),near(j),x(j))
-      fast(j)=x(j)>0.or.k(j)==0
+      if(statc(j)/=-4.or.nrev(j)>0)cycle
+      call table_root(kc(j),cc(j),ddc(j),wbc(j),nearc(j),xc(j))
+      fast(j)=xc(j)>0.or.kc(j)==0
    enddo
    do j=1,nc
-      if(.not.fast(j).or.k(j)==0)cycle
-      call fast_coordinate(k(j),x(j),nrev(j),g(j)%b,wb(j),lo(j),hi(j),kd(j),c(j),el,eight(j),hs(j),hc(j))
-      fast(j)=el>0;kr(j)=kexp(el)
+      if(.not.fast(j).or.kc(j)==0)cycle
+      call fast_coordinate(kc(j),xc(j),nrev(j),gc(j)%b,wbc(j),lbc(j),ubc(j),kd(j),cc(j),elc,eightc(j),hsc(j),hcc(j))
+      fast(j)=elc>0;krc(j)=kexp(elc)
    enddo
    ! Stage 3: one 8-node rectangle each, then its certificate.
    do j=1,nc
-      if(fast(j).and.k(j)/=0)call rect_ratio(kd(j),c(j),hs(j),hc(j),kr(j),eight(j),g(j)%y0,merge(wb(j),g(j)%yend,kd(j)==-2),g(j)%a,g(j)%b, &
-         g(j)%t,nrev(j),dd(j),de(j),sc(j))
+      if(fast(j).and.kc(j)/=0)call rect_ratio(kd(j),cc(j),hsc(j),hcc(j),krc(j),eightc(j),gc(j)%y0,merge(wbc(j),gc(j)%yend,kd(j)==-2),gc(j)%a,gc(j)%b, &
+         gc(j)%t,nrev(j),ddc(j),dec(j),scc(j))
    enddo
    do j=1,nc
-      if(fast(j).and.k(j)/=0)call fast_accept(kd(j),c(j),kr(j),dd(j),de(j),sc(j),hs(j),hc(j),k(j),x(j),fast(j))
+      if(fast(j).and.kc(j)/=0)call fast_accept(kd(j),cc(j),krc(j),ddc(j),dec(j),scc(j),hsc(j),hcc(j),kc(j),xc(j),fast(j))
    enddo
    ! Stage 4: the general path for the rest, then velocities.
    do j=1,nc
-      yy(j)=-1;trig(j)=.true.
+      yyc(j)=-1;trig(j)=.true.
       if(fast(j))then
-         status(j)=0
-         if(k(j)==0)then
-            k(j)=1;x(j)=0;hs(j)=0;hc(j)=1              ! parabola
+         statc(j)=0
+         if(kc(j)==0)then
+            kc(j)=1;xc(j)=0;hsc(j)=0;hcc(j)=1              ! parabola
          endif
-      elseif(status(j)==-4)then
-         call general_root(g(j),nrev(j),branch(j),k(j),x(j),hs(j),hc(j),trig(j),yy(j),status(j))
-         if(yy(j)<0.and..not.trig(j))then
-            if(k(j)>0)then
-               call sincos_half(x(j),hs(j),hc(j))
+      elseif(statc(j)==-4)then
+         call general_root(gc(j),nrev(j),branch(j),kc(j),xc(j),hsc(j),hcc(j),trig(j),yyc(j),statc(j))
+         if(yyc(j)<0.and..not.trig(j))then
+            if(kc(j)>0)then
+               call sincos_half(xc(j),hsc(j),hcc(j))
             else
-               call shch(x(j)/2,hs(j),hc(j))
+               call shch(xc(j)/2,hsc(j),hcc(j))
             endif
          endif
       endif
-      if(status(j)==0.or.status(j)==1)then
-         call velocities(g(j),r1(:,j),r2(:,j),direction(j),k(j),x(j),hs(j),hc(j),near(j),yy(j),v1(:,j),v2(:,j))
-         if(.not.all(ieee_is_finite(v1(:,j))).or..not.all(ieee_is_finite(v2(:,j))))status(j)=-4
+      if(statc(j)==0.or.statc(j)==1)then
+         call velocities(gc(j),r1c(:,j),r2c(:,j),dirc(j),kc(j),xc(j),hsc(j),hcc(j),nearc(j),yyc(j),v1c(:,j),v2c(:,j))
+         if(.not.all(ieee_is_finite(v1c(:,j))).or..not.all(ieee_is_finite(v2c(:,j))))statc(j)=-4
       endif
-      if(status(j)/=0.and.status(j)/=1)then
-         v1(:,j)=ieee_value(0.0_dp,ieee_quiet_nan);v2(:,j)=v1(:,j)
+      if(statc(j)/=0.and.statc(j)/=1)then
+         v1c(:,j)=ieee_value(0.0_dp,ieee_quiet_nan);v2c(:,j)=v1c(:,j)
       endif
    enddo
 
@@ -1525,21 +1525,21 @@ contains
          t=s*ih;v2(k)=t+(ieee_fma(s,ih,-t)+(s*il+es*ih))
       enddo
    contains
-      pure subroutine fsum(a,b,s,e)            ! s+e = a+b exactly
+      pure subroutine fsum(a,b,sm,er)            ! sm+er = a+b exactly
          real(dp),intent(in)::a,b
-         real(dp),intent(out)::s,e
+         real(dp),intent(out)::sm,er
          real(dp)::v
-         s=a+b;v=s-a;e=(a-(s-v))+(b-v)
+         sm=a+b;v=sm-a;er=(a-(sm-v))+(b-v)
       end subroutine
       pure subroutine dot2(u,v,h,l)            ! u.v as h+l (compensated)
          real(dp),intent(in)::u(3),v(3)
          real(dp),intent(out)::h,l
-         real(dp)::p,q,e,w
+         real(dp)::pr,q,er,w
          integer::i
          h=u(1)*v(1);l=ieee_fma(u(1),v(1),-h)
          do i=2,3
-            p=u(i)*v(i);e=ieee_fma(u(i),v(i),-p)
-            call fsum(h,p,w,q);h=w;l=l+(q+e)
+            pr=u(i)*v(i);er=ieee_fma(u(i),v(i),-pr)
+            call fsum(h,pr,w,q);h=w;l=l+(q+er)
          enddo
       end subroutine
       pure subroutine sqrt2s(xh,xl,h,l)        ! sqrt(xh+xl) as h+l
