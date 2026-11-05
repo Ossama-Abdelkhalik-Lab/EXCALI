@@ -534,7 +534,8 @@ contains
    enddo
    ! Stage 3: one rectangle each, then its acceptance.
    do j=1,nc
-      if(fast(j).and.kc(j)/=0)call rect_ratio(kd(j),cc(j),hsc(j),hcc(j),krc(j),eightc(j),gc(j)%y0,merge(wbc(j),gc(j)%yend,kd(j)==-2),gc(j)%a,gc(j)%b, &
+      ddc(j)=0
+      if(fast(j).and.kc(j)/=0.and.accc(j)>=0)call rect_ratio(kd(j),cc(j),hsc(j),hcc(j),krc(j),eightc(j),gc(j)%y0,merge(wbc(j),gc(j)%yend,kd(j)==-2),gc(j)%a,gc(j)%b, &
          gc(j)%t,nrev(j),ddc(j))
    enddo
    do j=1,nc
@@ -676,6 +677,7 @@ contains
       !   region                         k      starter                     acc
       !   parabola                       0      x = 0                        -
       !   |t-tp| <= 3.1% tp (near)       +-1    series reversion in X        X
+      !     2nd-order term < 1e-8 of X          the series itself            -1
       !   ellipse, |tau| < 0.75          1, 2   table_v (tab)                0
       !   ellipse, -0.9 <= tau < -0.75   1, 2   table_v (tab)                1
       !   ellipse, tau >= 0.75           1, 2   table_vp (tabp)              0
@@ -707,9 +709,13 @@ contains
             endif
          endif
          if(near)then
-            u=near_parabola_x(g%y0,g%a,g%b,g%t,tp)
+            ! When the second-order term is below 1e-8 of X the series is exact
+            ! to rounding (the dropped term is its square), while T-t at a
+            ! rectangle's nodes is then only a few hundred ulps and can round
+            ! to 0: the series is the root (acc -1).
+            call near_parabola_x(g%y0,g%a,g%b,g%t,tp,u,dt)
             if(u*k>0)x=sqrt(abs(u))
-            acc=1
+            acc=merge(-1,1,abs(dt)<1e-8_dp)
             return
          endif
          if(k<0.and.u<tabh_u0)then
@@ -1461,16 +1467,18 @@ contains
    ! hyperbola) from the series T = T0 + T1*X + T2*X**2 + ..., with
    ! y = y0 + b*X*(1/2 - X/24 + ...) and y*F + a from the parabolic series of
    ! F, reverted to second order: X = d/T1 - T2*d**2/T1**3, d = t - T0.
-   pure real(dp) function near_parabola_x(y0,a,b,t,tp) result(xx)
+   pure subroutine near_parabola_x(y0,a,b,t,tp,xx,rc)
       real(dp),intent(in)::y0,a,b,t,tp
+      real(dp),intent(out)::xx,rc       ! X, and the relative size of its second-order term
       real(dp)::q0,q1,q2,g0,g1,g2,p0,p1,p2,t1,t2,d
       g0=pser2(10);g1=pser2(9);g2=pser2(8)
       q0=sqrt(y0);q1=b/(4*q0);q2=(-b/24-q1*q1)/(2*q0)
       p0=y0*g0+a;p1=y0*g1+b/2*g0;p2=y0*g2+b/2*g1-b/24*g0
       t1=q0*p1+q1*p0;t2=q0*p2+q1*p1+q2*p0
       d=t-tp
-      xx=d/t1-t2*d*d/(t1*t1*t1)
-   end function
+      rc=t2*d/(t1*t1)
+      xx=d/t1*(1-rc)
+   end subroutine
 
    ! Multi-revolution table starter: tau and the semiperimeter sl, time t,
    ! revolutions m and branch br. stat=5: t is below the tabulated minimum
