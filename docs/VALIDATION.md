@@ -358,3 +358,169 @@ Every case the tables do not settle now goes to one fixed 32-point zero-height r
     | near-`t_min` | 390 ns | 868 ns |
 
     These are single runs, M1 Pro under load.
+
+## Single path for zero-revolution ellipses (2026-11-04)
+
+Zero-revolution ellipses take one path: geometry → starter → one fixed Gauss–Legendre rectangle → `Q1/Q0` → velocities. The rectangle's result is final: it has no certificate, retry or fallback. Ellipses outside the tables (`|tau| > 0.9`) go directly to their region formula.
+
+- **Normalized elliptic table.** The table now stores `(pi-v)/(s*ck)` and `v^2*T0'/(t-t_p)`, the root divided by its pole and parabola asymptotes. Its error relative to the singularity bound `min(v, pi-v)` falls from 10% to 3.9% (worst case up to `|tau| = 0.9`), and to 0.11% for `|tau| < 0.75`. The table size is unchanged (32×32×2), and the hyperbolic and multi-revolution tables are byte-identical.
+- **Node count, fixed before evaluation.** 3 nodes at half-width bound/256 for `|tau| < 0.75`; 8 nodes at bound/8 for `|tau| >= 0.75` and the near-parabolic series. The near-parabolic window widens from 3% to 3.1% of `t_p`, so it meets the table at `s = 0.99`.
+- **Measured starter errors** (66,114 ellipses of the truth sets, relative to `min(v, pi-v)`):
+
+  | Starter | Median | p99 | Max |
+  |---|---:|---:|---:|
+  | Previous table | 3e-5 | 4.2e-2 | 1.0e-1 |
+  | Near-parabolic series | — | — | 7.8e-2 |
+  | Closed-form Hermite | — | — | 6.1 |
+
+  The closed-form Hermite starter of earlier versions fails near `|b/(y0+b)| -> 1`.
+- **Alternatives tried:**
+  - Without the normalized table, one 8-node rectangle at bound/8 misses roots (34 failures in 40,000). At bound/4 it solves everything but loses accuracy (worst 3.5e-12 against 1.2e-13).
+  - A 3-node rule everywhere needs a starter within 0.16%.
+  - Tabulating the two scale factors in `tau` was too inaccurate: `t_p/T0'` spans five orders of magnitude and interpolates to 21% error.
+  - The kept form computes the one factor its side of the table needs.
+- **Truth sets** (119,531 cases): failure counts and maximum errors identical to the previous version in every category.
+- **Stress sets:** 40,000 zero-revolution and 24,000 multi-revolution cases, 0 failures (the original: 1 and 12).
+- **Tests.** Lamberts-Comparison CTest 9/9 (Release, Debug), standalone 3/3.
+- **benchmark_mixed** (3 interleaved runs, against the original EXCALI before 2026-11-03): zero failures. Elliptic classes take 0.99–1.035 of the original's time, within this machine's run-to-run spread. A controlled circular-transfer timing gives 153 ns for both.
+- **Code generation.** Adding the 8-node branch inside `fast_coordinate` cost 14 ns on circular transfers that never take it, so `solve_chunk` widens the rectangle after the call instead.
+- **24-point region formulas.** The per-region formulas (`ratio_root`) use 24 Gauss–Legendre points instead of 32.
+  - Accuracy is identical in every truth category; 16 points lose accuracy (up to 4.9e-12).
+  - The multi-revolution minimum keeps 32 points.
+  - `excali_batch` on the 70,000 elliptic truth cases (zero_rev categories 1, 3, 4; one thread):
+
+    | Version | Time per case |
+    |---|---:|
+    | Original EXCALI | 140 ns |
+    | Previous version | 207 ns |
+    | Single path, 32 points | 200 ns |
+    | Single path, 24 points | 186 ns |
+
+    The gap to the original comes from the degenerate ellipses of category 3 (chord under 1% of the semiperimeter, `|tau| > 0.9`). They use the region formulas, where the original used starters, rectangles and the bracketed contour.
+- **Single-solve profile** of a circular transfer: geometry and table coordinates 37 ns; table lookup, coordinate and centre trig 50 ns; rectangle 42 ns; acceptance 15 ns; velocities 10 ns.
+- **Measured and not kept** (circular-transfer timing, 153 ns):
+
+  | Change | Saving |
+  |---|---|
+  | Skipping the second moment and error estimate for ellipses | 1 ns or less |
+  | A three-term shift series in `rotate` | 0.5 ns |
+  | A specialized, unrolled 3-node elliptic rectangle | 2 ns, for about 30 more lines |
+  | Tabulated table scales | made the table up to 21% wrong |
+- **Short-way table toward `tau -> 1` (`tabp`).** A second 32×32×2 table covers short-way ellipses for `tau` in `[0.75, 1-1e-6]`, on a grid uniform in `1-sqrt(1-tau)`. It splits at `v = pi/2` (`T_half = T(pi/2)`, closed form). On the pole side it stores `(pi-v)/(s1*(K/T_half)^(1/3))`; `(K/T_half)^(1/3)` stays finite as `tau -> 1`. On the parabola side it stores `v^2/(s2*(s2+2*e0))`, `s2 = (t-t_p)/(T_half-t_p)`, `e0 = t_p/(T_half-t_p)`. As `lam -> 1`, `v^2` is proportional to `s2*(s2+2*e0)`, which absorbs the branch point's boundary layer.
+  - Starter error: at most 3.1e-5 of `min(v, pi-v)` over the whole range, so these ellipses use 3 nodes.
+  - Truth sets: identical or better in every category. Stress sets: 0 failures.
+  - `excali_batch` on the 70,000 hard elliptic truth cases: 187 → 147 ns per case (the original EXCALI: 140 ns). The short-way degenerate ellipses that used the 24-point Y formula now take the single path.
+- **Long-way closed-form starter (`tau < -0.9`).** As `tau -> -1`, `T/|b|^1.5` has a plateau at `pi/4` between a body, where `d = pi - v` depends only on `th = t/|b|^1.5`, and a pole layer of width `eta = sqrt(2*y_end/|b|)`. `long_d` uses three forms:
+  - the pole layer `(pi/4)((1+eta^2/d^2)^1.5-1) = th - pi/4`, solved exactly when it gives `d < 2*eta`;
+  - the transition cubic `d^3/2 + (th-pi/4) d^2 = 3*pi*eta^2/8`, in the scaled form `x^3/2 + chi x^2 = 3*pi/8` (`d = eta^(2/3) x`), solved through `1/x` for `chi > 0` and directly otherwise by trigonometric or hyperbolic formulas (cancellation-free), when it gives `d < 0.1`;
+  - otherwise the body limit from a 64-point table (`tabb`).
+
+  Results:
+  - Starter error at most 6.4% of `min(v, pi-v)` for `tau` from -0.9 to -0.999999; these cases use 8 nodes at bound/4.
+  - Short-way `tau > 1-1e-6` clamps `tabp` at its edge, also 8 nodes at bound/4.
+  - No zero-revolution ellipse in the truth sets or the 40,000-case stress set reaches the region formulas, so their elliptic dispatch was removed.
+  - Truth sets equal or better in every category, both stress sets 0 failures, all tests pass.
+  - `excali_batch` on the hard elliptic set: 145 ns per case (original EXCALI 140 ns).
+  - Earlier attempts that failed: the `v = pi/2` split on the long way (errors to 1e6), and a matched composite with a correction table (Cardano cancellation deep in the layer).
+- **benchmark_mixed** (final, 3 interleaved runs): zero failures; maximum errors equal or lower in every elliptic class. Overall time is 1.02 of the original (174 against 171 ns); elliptic classes 1.02–1.07. The controlled circular-transfer timing is equal (153 ns), so part of this is code layout between separately built binaries.
+- **Size.** `src/excali_solver.f90` is 1,687 lines, against 1,573 before. The additions are the two table lookups (`table_vp`, `long_d` with `depressed_max`), the 24-point constants, the per-side table scale and the node widening. The removals are the elliptic region dispatch, now unreachable.
+
+## Single path for zero-revolution hyperbolas (2026-11-04)
+
+Every zero-revolution case, elliptic or hyperbolic, now takes the same path: starter, one rectangle, `Q1/Q0`, velocities, with no certificate. The zero-revolution region formulas (`fixed_root`, the `Y`, `X` and `w` kinds) are removed; `general_root` serves multiple revolutions only.
+
+- **Where hyperbolas left the table path before** (logging build, `e290b01`):
+
+  | Set | Hyperbolas to region formulas | Cause |
+  |---|---:|---|
+  | zero_rev (100,000) | 2,091 | 2,010 short-way `tau > 0.9` (off `tabh`); 25 `abs(tau) < 4e-4`; 56 certificate rejections near the parabola (error estimate 4–60 ulp of a tiny `X`) |
+  | adversarial (4,771) | 887 | off the table at `abs(tau) > 0.9` (559) or `abs(tau) < 4e-4` (151), certificate rejections (177) |
+
+  The old `xi` table (`u < 0.1`) was also wrong by up to 4.7 times the singularity distance for short-way transfers within about 0.3 degree of 180 degrees; the certificate caught those.
+- **New hyperbolic table** (`tabh`, 32×32×2, replaces the 32×32×3 one): `u = t/t_p` in `[0.1, 1]`, `sqrt|tau|` in `[0, sqrt(1-1e-6)]`, clamped beyond. Short way `w^2/((1-u) wn^2)` with `wn^2 = L^2 (1 - exp(-wb^2/L^2))`, `L = 1 - log u`; long way `w^2/((1-u) L^2)`. Starter error at most 6.3e-4 of the singularity bound for `tau` from 1e-16 to 1 - 1e-9 (the rational blend `wb^2 L^2/(wb^2 + L^2)` reaches 1.3% near `tau = 4e-5`, because `wb ~ log(1/tau)`). These hyperbolas use 3 nodes at bound/256.
+- **Closed form for `u < 0.1`.** `T = sqrt2 c sqrt(y)/E`, `E = e^w`, `c = y0 + b`, `y = c - bE/2` (the large-`w` estimate the region formula used to centre its interval). Measured starter error, relative to the singularity bound:
+
+  | Branch | Coordinate | Worst error |
+  |---|---|---:|
+  | long way | `w = log E` | 1.1e-2 (at `u = 0.1`; 2.3e-4 at `u = 0.01`) |
+  | short way, `y >= y0/2` | `w = log E` | 1.1e-2 |
+  | short way, `y < y0/2` | `xi` from `y = (tE/(sqrt2 c))^2` via `cosh w = (c-y)/b` | 1.1e-2 |
+
+  These use 8 nodes at bound/8.
+- **Bugs found on the way:**
+  - The short-way bound `min(2w, wb-w)` had no cap. At large `w`, `T ~ exp(-w)` has near-copies of the root at `w ± 2 pi i`, and the half-width could exceed 1, past the node tables (`kr < 0`). The bound is now `min(2w, wb-w, pi)`, matching the long way's `min(w, pi)`.
+  - `xi ~ t^2` reaches half-widths below `2^-62` (the node tables' range) at `t/t_p ~ 1e-9`; `rect_ratio` now uses `cos = cosh = 1`, `sin = sinh = L u/2` there, exact to rounding.
+- **Rejected:** the `Y = sqrt(y)` coordinate for the short-way closed form. It is accurate (no other zero within 0.98 of `sqrt(y(pi)) - Y`, checked by the argument principle for `tau` from 1e-8 to 1), but needs an `asinh` per node: the fast-hyperbola category took 598 ns against 234. `xi` for every short-way closed form fails where `xi` is large: `sinh w` by angle addition cancels from about `1e20` (errors up to 179 in the stress set).
+- **Truth sets** (119,531 cases): failure counts equal or lower in every category, maximum errors equal within rounding (largest change 1.74e-12 → 1.90e-12 in zero_rev category 2); per case, none more than 4 times worse above 1e-13, two better.
+- **Stress sets** (quad-precision Kepler judge): the 40,000-case zero-revolution set and a new 100,000-case hyperbolic set (`t/t_p` from 1e-9 to 1, `r2/r1` from 1e-3 to 1, transfer angles clustered within 1e-12 of 0, 180 and 360 degrees): 0 failures, no velocity differing from the previous version by more than 1e-10.
+- **Tests.** Lamberts-Comparison CTest 9/9 (Release, Debug), standalone 3/3.
+- **Speed** (one thread):
+
+  | Measure | Previous | Now |
+  |---|---:|---:|
+  | `excali_batch`, adversarial set | 404–414 ns | 259–262 ns |
+  | `excali_batch`, zero_rev set | 152–155 ns | 140–143 ns |
+  | `excali_batch`, multirev / harness_mixed | 170 / 123–125 ns | 170 / 124–128 ns |
+  | single solves, adversarial hyperbolic categories 11–14, 18 | 356–483 ns | 182–225 ns |
+  | single solves, fastest hyperbolas (category 15) | 234 ns | 265 ns |
+  | benchmark_mixed, every class | — | within run-to-run spread of the previous version |
+
+- **Size.** `src/excali_solver.f90` is 1,608 lines (1,687 before): `fixed_root`, `xlow`, three `zeval` kinds, `table_xi`, `tabh_at` and the `yy` velocity path are gone; the closed form adds 22 lines.
+
+## One region selector for zero revolutions (2026-11-04)
+
+`zero_rev_start` replaces `table_coordinates`, `table_root` and the node-widening rules in `solve_chunk`. It returns the coordinate, the starter and an accuracy class (0: 3 nodes at bound/256; 1: 8 nodes at bound/8; 2: 8 nodes at bound/4), and `fast_coordinate` alone turns the class into the rectangle. Every zero-revolution region, its starter and its rectangle are listed in one comment table (and in the README).
+
+- **Results identical** in 119,526 of 119,531 truth cases (bit for bit). The other 5 (adversarial categories 11 and 14) are near-parabolic hyperbolas with `w` just above 0.3. They now get the 8-node rectangle the series starter is meant to have; before, they fell through to 3 nodes at bound/256. Both versions are at rounding (2e-15 to 2e-14).
+- **Stress sets** (40,000 zero-revolution, 100,000 hyperbolic): 0 failures, no velocity differing from the previous version by more than 1e-10. Tests: CTest 9/9 (Release, Debug), standalone 3/3.
+- **Code generation.** Calling the selector inside the geometry loop cost 8–13 ns per solve. A separate loop costs nothing measurable. Splitting the hyperbolic closed form into its own routine, a module-level selector, or arithmetic widths instead of `select case` changed nothing.
+- **Speed** (best of 3–15 interleaved runs, against the previous commit):
+  - `excali_batch`: equal or faster on every set (zero_rev 139 → 137 ns, adversarial 256 → 248, multirev 169 → 168).
+  - Single solves: equal or 1–8% faster in every truth category.
+  - Circular-transfer microbenchmark: best 152 → 157 ns, mean 158 → 162, within this machine's run-to-run spread (the same binary measured 152–166).
+  - benchmark_mixed: every class within 1 ns of the previous version, same maximum errors.
+- **Size.** `src/excali_solver.f90`: 1,601 lines (1,608).
+
+## Multiple revolutions on a single path inside the tables (2026-11-04)
+
+The multi-revolution table rectangle no longer carries a certificate, and the certificate code is gone (`rect_ratio` computes `Q0` and `Q1` only; `fast_accept` only moves the root). `general_root` now serves multiple revolutions off the tables only (`abs(tau) > 0.9`): 28 cases of the truth sets, against 639 before.
+
+- **Normalized table.** The old `mr_v` (16×16 per slice, `v` itself) was off by up to 8 times `abs(v - v*)` near the fold and 20% of `min(v*, pi - v*)` elsewhere; the certificate hid that. The new `mr_q(32,16,2,11)` stores `q = (v - v*)/(sigma (P - v*))`, `P` the pole on the branch's side, on one half-grid in `abs(sigma)` per branch.
+  - **Normalizations tried** (worst starter error relative to the rectangle's bound, 1,500 random cases including `m` between slices up to 1,000):
+
+    | Table | Near the fold (`1e-3 <= abs(sigma) < 1e-2`) | `abs(sigma) > 0.9` |
+    |---|---:|---:|
+    | `v`, 16×16 (old) | 800% | 0.5% |
+    | `(v - v*)/sigma`, 32×32 | 2.2% | 15% (interpolated `v*` error at the pole) |
+    | `q`, one grid across `sigma = 0` | 1,500% (`q` jumps at `sigma = 0`) | 0.15% |
+    | `q`, half-grids, 16 `tau` | 7% | 0.3% |
+    | `q`, half-grids, 32 `tau` (kept) | 2.5% | 0.17% |
+
+  - End-to-end in Python (3,000 cases, `abs(sigma) >= 1e-2`): one 8-node rectangle at bound/8 gives every root to the truth's precision (3e-13); the starter is at most 0.49 of the half-width from the root.
+- **Near the fold** (`abs(sigma) < 1e-2`, or `t` within the 1e-6 margin of the table's `t_min`): `mrev_fold`.
+  - One 8-node ratio of `D = T' sin^4 v` at `min(v*, pi - v*)/8` about the table's `v*` (within 6e-5 of that bound) gives `v*`, and `t_min = T(v*)` decides feasibility exactly.
+  - The starter is the fold series `v* + k s (1 - T''' k s/(6 T''))`; in Python it is within 0.6% of `abs(v - v*)` for `abs(s) < 3e-2`.
+  - It replaces the 32 + 24-node `mrev_global`/`branch_fixed` pair for these cases.
+- **Rejected:**
+  - A table-free starter, a cubic Hermite inverse of `rho(v)` from the pole and fold slopes. It fails for `abs(tau) > 0.7`, where the `sqrt(y)` branch points crowd an end.
+  - The two-root rectangle (`research/closed-form/two-root` in Lamberts-Comparison), which only contains both roots for `abs(sigma) < 1e-2`.
+- **Truth sets:**
+  - multirev: identical summary (0 failures, maximum 3.66e-12); per case 9 better and 3 worse by more than 4 times (worst 8e-13).
+  - Near-minimum adversarial category 10: failures above 1e-10 drop from 172 to 161; the maximum goes from 1.1e-8 to 1.6e-8; per case 83 better, 76 worse. These are the cases within a few ulp of `t_min`, where `abs(v - v*)` is about `sqrt(eps)` and both methods are limited by the rounding of `t_min` itself.
+  - Every zero-revolution result is bit-identical to the previous commit except one (one rounding, from computing `Q1/Q0` directly).
+- **Stress sets:**
+  - Multi-revolution, 24,000 cases including 6,000 infeasible: 0 failures, 0 feasibility disagreements. Where velocities differ by more than 1e-8 (483 cases, all near the fold), the new version is 10 times closer to `r2` in 44 and the previous one in 29; worst arrival error 2.6e-9 against 2.9e-9.
+  - Zero-revolution (40,000) and hyperbolic (100,000): unchanged, 0 failures.
+- **Tests:** CTest 9/9 (Release, Debug), standalone 3/3. benchmark_mixed maximum errors: multirev_1 5.1e-13 → 7.9e-14, multirev_long 8.2e-13 → 2.8e-13, multirev_2_3 2.0e-13 → 2.3e-13.
+- **Speed** (best of 3, one thread):
+
+  | Measure | Before | Now |
+  |---|---:|---:|
+  | Single solves, near-minimum category 10 | 899 ns | 456 ns |
+  | Single solves, multirev set | 214 ns | 215 ns |
+  | `excali_batch`, multirev set | 169 ns | 163 ns |
+  | `excali_batch`, adversarial set | 257 ns | 165 ns |
+  | Circular-transfer microbenchmark, mean of 15 (best) | 162 ns (157) | 163 ns (162) |
+
+  Making `mrev_fold` a module procedure instead of an internal one was slower (166 ns).
+- **Size:** `src/excali_tables.inc` grows by about 1,860 lines (the 11,264-value `mr_q` against 2,816 for `mr_v`).
