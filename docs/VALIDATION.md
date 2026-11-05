@@ -480,3 +480,47 @@ Every zero-revolution case, elliptic or hyperbolic, now takes the same path: sta
   - Circular-transfer microbenchmark: best 152 → 157 ns, mean 158 → 162, within this machine's run-to-run spread (the same binary measured 152–166).
   - benchmark_mixed: every class within 1 ns of the previous version, same maximum errors.
 - **Size.** `src/excali_solver.f90`: 1,601 lines (1,608).
+
+## Multiple revolutions on a single path inside the tables (2026-11-04)
+
+The multi-revolution table rectangle no longer carries a certificate, and the certificate code is gone (`rect_ratio` computes `Q0` and `Q1` only; `fast_accept` only moves the root). `general_root` now serves multiple revolutions off the tables only (`abs(tau) > 0.9`): 28 cases of the truth sets, against 639 before.
+
+- **Normalized table.** The old `mr_v` (16×16 per slice, `v` itself) was off by up to 8 times `abs(v - v*)` near the fold and 20% of `min(v*, pi - v*)` elsewhere; the certificate hid that. The new `mr_q(32,16,2,11)` stores `q = (v - v*)/(sigma (P - v*))`, `P` the pole on the branch's side, on one half-grid in `abs(sigma)` per branch.
+  - **Normalizations tried** (worst starter error relative to the rectangle's bound, 1,500 random cases including `m` between slices up to 1,000):
+
+    | Table | Near the fold (`1e-3 <= abs(sigma) < 1e-2`) | `abs(sigma) > 0.9` |
+    |---|---:|---:|
+    | `v`, 16×16 (old) | 800% | 0.5% |
+    | `(v - v*)/sigma`, 32×32 | 2.2% | 15% (interpolated `v*` error at the pole) |
+    | `q`, one grid across `sigma = 0` | 1,500% (`q` jumps at `sigma = 0`) | 0.15% |
+    | `q`, half-grids, 16 `tau` | 7% | 0.3% |
+    | `q`, half-grids, 32 `tau` (kept) | 2.5% | 0.17% |
+
+  - End-to-end in Python (3,000 cases, `abs(sigma) >= 1e-2`): one 8-node rectangle at bound/8 gives every root to the truth's precision (3e-13); the starter is at most 0.49 of the half-width from the root.
+- **Near the fold** (`abs(sigma) < 1e-2`, or `t` within the 1e-6 margin of the table's `t_min`): `mrev_fold`.
+  - One 8-node ratio of `D = T' sin^4 v` at `min(v*, pi - v*)/8` about the table's `v*` (within 6e-5 of that bound) gives `v*`, and `t_min = T(v*)` decides feasibility exactly.
+  - The starter is the fold series `v* + k s (1 - T''' k s/(6 T''))`; in Python it is within 0.6% of `abs(v - v*)` for `abs(s) < 3e-2`.
+  - It replaces the 32 + 24-node `mrev_global`/`branch_fixed` pair for these cases.
+- **Rejected:**
+  - A table-free starter, a cubic Hermite inverse of `rho(v)` from the pole and fold slopes. It fails for `abs(tau) > 0.7`, where the `sqrt(y)` branch points crowd an end.
+  - The two-root rectangle (`research/closed-form/two-root` in Lamberts-Comparison), which only contains both roots for `abs(sigma) < 1e-2`.
+- **Truth sets:**
+  - multirev: identical summary (0 failures, maximum 3.66e-12); per case 9 better and 3 worse by more than 4 times (worst 8e-13).
+  - Near-minimum adversarial category 10: failures above 1e-10 drop from 172 to 161; the maximum goes from 1.1e-8 to 1.6e-8; per case 83 better, 76 worse. These are the cases within a few ulp of `t_min`, where `abs(v - v*)` is about `sqrt(eps)` and both methods are limited by the rounding of `t_min` itself.
+  - Every zero-revolution result is bit-identical to the previous commit except one (one rounding, from computing `Q1/Q0` directly).
+- **Stress sets:**
+  - Multi-revolution, 24,000 cases including 6,000 infeasible: 0 failures, 0 feasibility disagreements. Where velocities differ by more than 1e-8 (483 cases, all near the fold), the new version is 10 times closer to `r2` in 44 and the previous one in 29; worst arrival error 2.6e-9 against 2.9e-9.
+  - Zero-revolution (40,000) and hyperbolic (100,000): unchanged, 0 failures.
+- **Tests:** CTest 9/9 (Release, Debug), standalone 3/3. benchmark_mixed maximum errors: multirev_1 5.1e-13 → 7.9e-14, multirev_long 8.2e-13 → 2.8e-13, multirev_2_3 2.0e-13 → 2.3e-13.
+- **Speed** (best of 3, one thread):
+
+  | Measure | Before | Now |
+  |---|---:|---:|
+  | Single solves, near-minimum category 10 | 899 ns | 456 ns |
+  | Single solves, multirev set | 214 ns | 215 ns |
+  | `excali_batch`, multirev set | 169 ns | 163 ns |
+  | `excali_batch`, adversarial set | 257 ns | 165 ns |
+  | Circular-transfer microbenchmark, mean of 15 (best) | 162 ns (157) | 163 ns (162) |
+
+  Making `mrev_fold` a module procedure instead of an internal one was slower (166 ns).
+- **Size:** `src/excali_tables.inc` grows by about 1,860 lines (the 11,264-value `mr_q` against 2,816 for `mr_v`).

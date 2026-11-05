@@ -30,9 +30,15 @@ Multiple revolutions, slices in mu = 1/m (m in MR_M, the last ~infinity),
 interpolated in mu at run time, |tau| <= TM:
   mr_c(:,k) = cbrt(t_min/m)/sqrt(s_L) and mr_s(:,k) = v* (the minimum-time
   location) on a fine tau grid of MR_NC points;
-  mr_v(:,:,k) = branch root v on tau x sigma, sigma = branch*sqrt(1-(t_min/t)**(1/3)).
-The starters only need to be within a few percent of the singularity
-distance, so their grids are coarse. mr_c decides
+  mr_q(:,:,h,k) = branch root normalized by its two anchors on tau x |sigma|,
+  sigma = branch*sqrt(1-(t_min/t)**(1/3)), one half per branch (h=1: sigma<0,
+  h=2: sigma>0): q = (v - v*)/(sigma*(P - v*)), P = 0 or pi the pole on the
+  branch's side. q is smooth on each half, tends to sqrt(6 t_min/T''(v*))/|P-v*|
+  at the fold and to 1 at the pole, where v = v* + sigma*(P-v*)*q hits P exactly
+  whatever the error of the interpolated v*. With 32 tau points and 16 |sigma|
+  points it is within 2.5% of |v - v*| (or the pole distance) for |sigma| >=
+  1e-3, so the rectangle needs no certificate (the old 16x16 table of v itself
+  was off by up to 8 times |v - v*| near the fold). mr_c decides
 feasibility outside a 1e-6 margin, so it needs MR_NC >= 128 and the m = 5
 slice (worst relative error 1.04e-7 for m = 1..40 and sampled m to 1000,
 including m between slices; 4.4e-7 at m = 5 when that slice is left out).
@@ -132,7 +138,7 @@ def hyperbolic(n):
     return out
 
 
-MR_M = [1, 2, 3, 4, 5, 6, 8, 12, 16, 32, 1000000]; MR_NT = 16; MR_NS = 16; MR_NC = 128
+MR_M = [1, 2, 3, 4, 5, 6, 8, 12, 16, 32, 1000000]; MR_NT = 32; MR_NS = 16; MR_NC = 128
 
 
 def tmin_v(lam, m):
@@ -161,12 +167,16 @@ def branch_v(lam, sig, m):
 
 
 def multi_rev(n):
-    tg = np.linspace(-TM, TM, n); lg = 2 * tg / (1 + tg * tg); sg = np.linspace(-1, 1, MR_NS)
-    L, S = np.meshgrid(lg, np.clip(sg, -1 + 1e-9, 1 - 1e-9), indexing='ij')
+    tg = np.linspace(-TM, TM, n); lg = 2 * tg / (1 + tg * tg); sg = np.linspace(0, 1, MR_NS)
     tc = np.linspace(-TM, TM, MR_NC); lc = 2 * tc / (1 + tc * tc)
-    V = np.zeros((n, MR_NS, len(MR_M))); C = np.zeros((MR_NC, len(MR_M))); VS = np.zeros_like(C)
+    V = np.zeros((n, MR_NS, 2, len(MR_M))); C = np.zeros((MR_NC, len(MR_M))); VS = np.zeros_like(C)
     for k, m in enumerate(MR_M):
-        V[:, :, k] = branch_v(L, S, m)
+        _, vg = tmin_v(lg, m)
+        for h, br in enumerate((-1, 1)):
+            S = br * np.clip(sg, 1e-7, 1 - 1e-9)
+            L, SS = np.meshgrid(lg, S, indexing='ij')
+            P = np.pi if br > 0 else 0.0
+            V[:, :, h, k] = (branch_v(L, SS, m) - vg[:, None]) / (SS * (P - vg[:, None]))
         tm, vs = tmin_v(lc, m)
         # T scales as s_L**1.5 (canonical s_L = 2/(1+lam**2)).
         C[:, k] = np.cbrt(tm / m) / np.sqrt(2 / (1 + lc * lc)); VS[:, k] = vs
@@ -336,12 +346,12 @@ def write(out, n, A, B, PA, PB, LB, HS, HL, V, C, VS):
         f.write(f"   integer,parameter::tabb_n={LB.shape[0]}\n")
         arr(f, "tabb", LB)
         block(f, "tabh", (HS, HL))
-        f.write(f"   ! Multiple revolutions (slices in mu = 1/m, last ~infinity): mr_v(tau,sigma,k) branch root,\n")
+        f.write(f"   ! Multiple revolutions (slices in mu = 1/m, last ~infinity): mr_q(tau,|sigma|,branch,k) = (v-v*)/(sigma*(P-v*)),\n")
         f.write(f"   ! mr_c(tau,k) = cbrt(t_min/m)/sqrt(s_L), mr_s(tau,k) = v*; |tau| <= {TM}.\n")
         f.write(f"   integer,parameter::mr_nt={V.shape[0]},mr_ns={V.shape[1]},mr_nm={len(MR_M)},mr_nc={MR_NC}\n")
         f.write("   real(dp),parameter::mr_mu(mr_nm)=[" + ",".join(f"{1 / m:.17e}_dp" for m in MR_M) + "]\n")
         f.write("   integer,parameter::mr_m(mr_nm)=[" + ",".join(str(m) for m in MR_M) + "]\n")
-        arr(f, "mr_v", V); arr(f, "mr_c", C); arr(f, "mr_s", VS)
+        arr(f, "mr_q", V); arr(f, "mr_c", C); arr(f, "mr_s", VS)
 
 if __name__ == "__main__":
     n = int(sys.argv[1]) if len(sys.argv) > 1 else 32

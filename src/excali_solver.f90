@@ -483,9 +483,9 @@ contains
    integer,intent(out)  :: statc(nc),halfc(nc)
    real(dp),optional,intent(in) :: pnormal(3)
    type(frame) :: gc(nb)
-   real(dp) :: xc(nb),cc(nb),hsc(nb),hcc(nb),wbc(nb),lbc(nb),ubc(nb),ddc(nb),dec(nb),elc,vsc,chord,semi
+   real(dp) :: xc(nb),cc(nb),hsc(nb),hcc(nb),wbc(nb),lbc(nb),ubc(nb),ddc(nb),elc,vsc,chord,semi
    integer :: kc(nb),kd(nb),krc(nb),accc(nb),j
-   logical :: fast(nb),scc(nb),nearc(nb),trig(nb),eightc(nb)
+   logical :: fast(nb),nearc(nb),trig(nb),eightc(nb)
    ! Stage 1: geometry; the multi-revolution tables.
    do j=1,nc
       fast(j)=.false.;nearc(j)=.false.;halfc(j)=0;statc(j)=-1
@@ -501,8 +501,13 @@ contains
          statc(j)=5
          if(gc(j)%t>=nrev(j)*pi*semi*sqrt(semi)/sqrt2*(1-1e-12_dp)) &
             call mrev_table(gc(j)%a/(sqrt2*semi)/(1+sqrt(chord/semi)),semi,gc(j)%t,nrev(j),branch(j),xc(j),vsc,statc(j))
+         if(statc(j)==2)call mrev_fold(gc(j),nrev(j),branch(j),vsc,xc(j),statc(j))
          fast(j)=statc(j)==1;kc(j)=1
-         if(statc(j)/=5)statc(j)=-4
+         if(statc(j)==3)then
+            statc(j)=1;xc(j)=vsc                    ! t = t_min: the root is v* itself
+         elseif(statc(j)/=5)then
+            statc(j)=-4
+         endif
          if(branch(j)<0)then
             ubc(j)=vsc
          else
@@ -511,6 +516,7 @@ contains
          if(xc(j)>.75_dp*pi)then                    ! distance from the upper pole
             elc=lbc(j);lbc(j)=pi-ubc(j);ubc(j)=pi-elc;xc(j)=pi-xc(j);kc(j)=2
          endif
+         if(statc(j)==1)call sincos_half(xc(j),hsc(j),hcc(j))
       endif
    enddo
    ! Stage 2: the zero-revolution region selector (its own loop: inside the
@@ -529,11 +535,10 @@ contains
    ! Stage 3: one rectangle each, then its acceptance.
    do j=1,nc
       if(fast(j).and.kc(j)/=0)call rect_ratio(kd(j),cc(j),hsc(j),hcc(j),krc(j),eightc(j),gc(j)%y0,merge(wbc(j),gc(j)%yend,kd(j)==-2),gc(j)%a,gc(j)%b, &
-         gc(j)%t,nrev(j),ddc(j),dec(j),scc(j))
+         gc(j)%t,nrev(j),ddc(j))
    enddo
    do j=1,nc
-      if(fast(j).and.kc(j)/=0)call fast_accept(kd(j),cc(j),krc(j),ddc(j),dec(j),scc(j),hsc(j),hcc(j),kc(j),xc(j),fast(j), &
-         nrev(j)==0)
+      if(fast(j).and.kc(j)/=0)call fast_accept(kd(j),cc(j),ddc(j),hsc(j),hcc(j),kc(j),xc(j),fast(j))
    enddo
    ! Stage 4: the multi-revolution region formulas for the rest, then velocities.
    do j=1,nc
@@ -616,6 +621,51 @@ contains
          g%ypi=g%yend;if(g%b>=0)g%ypi=g%y0+2*g%b
          g%t=tof/(g%scale*sqrt(g%scale))
          status=-4
+      end subroutine
+
+      ! Multiple revolutions near the fold (|sigma| < 1e-2, or t within the
+      ! table's t_min margin), where the table's v* error (6e-5 of
+      ! R=min(v*,pi-v*)) would dominate |v-v*|. v* is the only zero of
+      ! D = T'*sin(v)**4 near the table's value: one 8-node ratio at R/8. Then
+      ! t_min=T(v*) is exact to rounding and decides feasibility (stat 5; stat
+      ! 3: t = t_min, the root is v*), and the branch root starts from the fold
+      ! series v = v* + k*s*(1 - T3*k*s/(6*T2)), k = sqrt(6 t_min/T2) with T2,
+      ! T3 the second and third derivatives at v*, s = branch*sqrt(1-(t_min/t)**(1/3)),
+      ! within 0.6% of |v-v*| for |s| < 3e-2 (stat 1, vs = v*).
+      pure subroutine mrev_fold(g,m,br,vs,x,stat)
+         type(frame),intent(in)::g
+         integer,intent(in)::m,br
+         real(dp),intent(inout)::vs
+         real(dp),intent(out)::x
+         integer,intent(out)::stat
+         real(dp)::el,xn(n1),ff(n1),fp(n1),dd(0:3),sn,cn,s,co,fa,fb,err,pt,ut,sg,k,z
+         integer::i
+         el=pow2m(kexp(min(vs,pi-vs)/8));fa=0;fb=0
+         do i=1,n1+2
+            z=vs+el*u8(i)
+            call sincos_half(z,sn,cn)
+            call time_derivs(z,1,m,g%y0,g%yend,g%a,g%b,dd,sn,cn)
+            s=2*sn*cn;co=(cn-sn)*(cn+sn)
+            if(i<=n1)then
+               xn(i)=z;ff(i)=1/(dd(1)*s**4);fp(i)=-(dd(2)*s+4*dd(1)*co)*s**3*ff(i)**2
+            elseif(i==n1+1)then
+               fb=1/(dd(1)*s**4)
+            else
+               fa=1/(dd(1)*s**4)
+            endif
+         enddo
+         call global_ratio(n1,ff,fp,fa,fb,vs-el,vs+el,xn,w8(1:n1)*el,vs,x,err)
+         vs=x
+         call sincos_half(vs,sn,cn)
+         call time_derivs(vs,1,m,g%y0,g%yend,g%a,g%b,dd,sn,cn)
+         stat=5
+         if(g%t<dd(0)*(1-16*epsilon(dd(0))))return
+         stat=3
+         if(abs(g%t-dd(0))<=16*epsilon(dd(0))*dd(0))return
+         pt=dd(0)/g%t;ut=cbrt_c(pt);sg=br*sqrt((1-pt)/(1+ut+ut*ut))
+         k=sqrt(6*dd(0)/dd(2))
+         x=vs+k*sg*(1-dd(3)*k*sg/(6*dd(2)))
+         stat=1
       end subroutine
 
       ! Zero-revolution region selector: the coordinate k, the starter x in it
@@ -747,7 +797,7 @@ contains
          logical,intent(out)::eight
          hs=0;hc=1;kind1=k;c=x;eight=.true.
          if(m>0)then
-            el=min(c-lo,hi-c)/16
+            el=min(c-lo,hi-c)/8
             call sincos_half(c,hs,hc)
             return
          elseif(abs(k)==1.and.x<.3_dp)then
@@ -780,20 +830,17 @@ contains
          end select
       end subroutine
 
-      ! Accept the rectangle and move the root and its half-angle functions to
-      ! it: always when final (zero revolutions), else on a sign change
-      ! of T-t, the estimate inside and the error estimate at rounding.
-      pure subroutine fast_accept(kind1,c,kr,dd,de,sc,hs,hc,k,x,ok,final)
-         integer,intent(in)::kind1,kr
-         real(dp),intent(in)::c,dd,de
-         logical,intent(in)::sc,final
+      ! The rectangle's root is final: move the root and its half-angle
+      ! functions to it (ok false only for a non-finite result).
+      pure subroutine fast_accept(kind1,c,dd,hs,hc,k,x,ok)
+         integer,intent(in)::kind1
+         real(dp),intent(in)::c,dd
          real(dp),intent(inout)::hs,hc
          integer,intent(inout)::k
          real(dp),intent(inout)::x
          logical,intent(out)::ok
          real(dp)::cn
-         ok=final.and.abs(dd)<huge(dd)
-         ok=ok.or.(sc.and.abs(dd)<.8_dp*pow2m(kr).and.de<=4*epsilon(c)*max(abs(c),merge(1e-2_dp,0._dp,kind1==0)))
+         ok=abs(dd)<huge(dd)
          if(.not.ok)return
          cn=c+dd
          if(kind1==0)then
@@ -905,14 +952,13 @@ contains
       err=abs(q2/q0-d*d)/(hi-lo)
    end subroutine
 
-   pure subroutine rect_ratio(kind1,c,hs,hc,kr,eight,y0,yend,a,b,t,m,dd,de,sc)
+   pure subroutine rect_ratio(kind1,c,hs,hc,kr,eight,y0,yend,a,b,t,m,dd)
       integer,intent(in)::kind1,kr,m
       real(dp),intent(in)::c,hs,hc,y0,yend,a,b,t
       logical,intent(in)::eight
-      real(dp),intent(out)::dd,de
-      logical,intent(out)::sc
+      real(dp),intent(out)::dd
       real(dp),dimension(n1+2)::uu,wq,ct,st,f,f1
-      real(dp)::el,q0,q1,q2,r0,r1,r2,fa,fb,x,sh,ch,sn,cn,rs,yv,y1,ff,ff1,q,g,g1,ser,ser1,pk,y00,ab,mt,sb,cb
+      real(dp)::el,q0,q1,r0,r1,fa,fb,x,sh,ch,sn,cn,rs,yv,y1,ff,ff1,q,g,g1,ser,ser1,pk,y00,ab,mt,sb,cb
       integer::np,j,n
       logical::lw,us
       el=pow2m(kr)
@@ -1013,36 +1059,27 @@ contains
             endif
          enddo
       end select
-      ! Q[g'] = g(c+L)-g(c-L) - L*sum w g'(x) for g = f, (x-c)f, (x-c)**2 f.
+      ! Q[g'] = g(c+L)-g(c-L) - L*sum w g'(x) for g = f, (x-c)f; dd=Q1/Q0.
       ! Two interleaved partial sums shorten the dependent chain.
       fb=f(np-1);fa=f(np)
-      q0=0;q1=0;q2=0;r0=0;r1=0;r2=0
+      q0=0;q1=0;r0=0;r1=0
       do j=1,np-3,2
          x=el*uu(j)
          q0=q0+wq(j)*f1(j)
          q1=q1+wq(j)*(x*f1(j)+f(j))
-         q2=q2+wq(j)*x*(x*f1(j)+2*f(j))
          x=el*uu(j+1)
          r0=r0+wq(j+1)*f1(j+1)
          r1=r1+wq(j+1)*(x*f1(j+1)+f(j+1))
-         r2=r2+wq(j+1)*x*(x*f1(j+1)+2*f(j+1))
       enddo
       if(mod(np,2)==1)then
          j=np-2;x=el*uu(j)
          q0=q0+wq(j)*f1(j)
          q1=q1+wq(j)*(x*f1(j)+f(j))
-         q2=q2+wq(j)*x*(x*f1(j)+2*f(j))
       endif
       q0=fb-fa-el*(q0+r0)
       q1=el*(fb+fa)-el*(q1+r1)
-      q2=el*el*(fb-fa)-el*(q2+r2)
-      q=1/q0
-      dd=q1*q
-      de=abs(q2*q-dd*dd)*pow2m(-kr)
-      sc=fa*fb<0                     ! T-t changes sign: a root is inside
-      if(.not.(de==de).or..not.(dd==dd))then
-         dd=huge(dd);de=huge(de)
-      endif
+      dd=q1/q0
+      if(.not.(dd==dd))dd=huge(dd)
    end subroutine
 
 
@@ -1437,9 +1474,12 @@ contains
 
    ! Multi-revolution table starter: tau and the semiperimeter sl, time t,
    ! revolutions m and branch br. stat=5: t is below the tabulated minimum
-   ! time by more than the table error (infeasible); stat=1: v is the
-   ! branch root estimate and vs the minimum-time location; stat=0: outside
-   ! the tables or too close to t_min. Slices in mu=1/m by 4-point Lagrange.
+   ! time by more than the table error (infeasible); stat=1: v is the branch
+   ! root, within 2.5% of its distance to v* (or to the pole), from the
+   ! normalized table v = v* + sigma*(P-v*)*q; stat=2: near the fold
+   ! (|sigma| < 1e-2, or within the table's t_min margin), vs is v* within
+   ! 6e-5 of min(v*,pi-v*) for mrev_fold; stat=0: outside the tables. Slices
+   ! in mu=1/m by 4-point Lagrange.
    pure subroutine mrev_table(tau,sl,t,m,br,v,vs,stat)
       real(dp),intent(in)::tau,sl,t
       integer,intent(in)::m,br
@@ -1447,7 +1487,7 @@ contains
       integer,intent(out)::stat
       real(dp),parameter::margin=1e-6_dp
       real(dp)::u,wt(4),wc(4),ws(4),wm(4),mu,cm,r,sig
-      integer::i,ic,j,k,km(4),nk,ia,jb,kk
+      integer::i,ic,j,k,km(4),nk,ia,jb,kk,h
       stat=0;v=0;vs=0
       if(.not.(abs(tau)<=tab_tmax))return
       mu=1._dp/m;nk=0
@@ -1482,18 +1522,22 @@ contains
       if(r>1+margin)then
          stat=5;return
       endif
+      stat=2
       if(r>=1-margin)return
-      sig=br*sqrt(1-r)
+      sig=sqrt(1-r)
+      if(sig<1e-2_dp)return
+      stat=0;h=merge(2,1,br>0)
       u=(tau+tab_tmax)*((mr_nt-1)/(2*tab_tmax))
       i=min(max(int(u)-1,0),mr_nt-4);call lagrange4(u-i,wt)
-      u=(sig+1)*((mr_ns-1)/2._dp)
+      u=sig*(mr_ns-1)
       j=min(max(int(u)-1,0),mr_ns-4);call lagrange4(u-j,ws)
       do k=1,nk
          do jb=1,4
-            v=v+wm(k)*ws(jb)*(wt(1)*mr_v(i+1,j+jb,km(k))+wt(2)*mr_v(i+2,j+jb,km(k)) &
-               +wt(3)*mr_v(i+3,j+jb,km(k))+wt(4)*mr_v(i+4,j+jb,km(k)))
+            v=v+wm(k)*ws(jb)*(wt(1)*mr_q(i+1,j+jb,h,km(k))+wt(2)*mr_q(i+2,j+jb,h,km(k)) &
+               +wt(3)*mr_q(i+3,j+jb,h,km(k))+wt(4)*mr_q(i+4,j+jb,h,km(k)))
          enddo
       enddo
+      v=vs+sig*(merge(pi,0._dp,br>0)-vs)*br*v
       if(v>0.and.v<pi.and.vs>0.and.vs<pi.and.(v-vs)*br>0)stat=1
    end subroutine
 
