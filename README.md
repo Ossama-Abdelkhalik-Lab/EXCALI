@@ -46,6 +46,7 @@ call excali_solve(r1, r2, tof, mu, direction, revolutions, branch, v1, v2, statu
 |---:|---|
 | 0 | Converged solution |
 | 1 | Coalesced multi-revolution roots at minimum time |
+| 2 | Solved, low confidence: the final rectangle's error estimate exceeds 1e-8 of its singularity bound (velocities returned, never re-solved). Seen only within about 3e-9 of a multi-revolution minimum time, where the root is ill-conditioned (accuracy about 1e-8); anywhere else it signals a starter or width regression, and the tests treat it as a failure. |
 | 5 | Time below the requested multi-revolution minimum |
 | -1 | Invalid inputs |
 | -2 | Degenerate geometry or missing/invalid antipodal plane |

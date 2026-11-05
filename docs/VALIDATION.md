@@ -555,3 +555,17 @@ A larger multi-revolution stress run (120,000 cases), plus a run with times up t
 - `test_excali` on Linux x86-64 (Docker): 0 bad.
 - CTest: 9/9 and 3/3 (Release, Debug).
 - Batch timings: equal to the previous version.
+
+## Confidence flag on the final rectangle (2026-11-05)
+
+Every final rectangle again computes its second moment. `de = |Q2/Q0 - (Q1/Q0)^2|` vanishes for a single pole. When `de/L > 1e-8 R` (`L` the half-width, `R` the singularity bound), the case returns status 2, "solved, low confidence". The velocities are returned and nothing is re-solved. It costs about 1.5 ns per single solve (circular microbenchmark, best of 15) and 3-5 ns per case in batch.
+
+- **Where it appears.** It never appears in the zero-revolution truth sets (largest `de/(R L)` = 4.8e-11), harness_mixed, dev, multirev (1.4e-9), the 40,000 zero-revolution, 100,000 hyperbolic or 60,000 near-parabolic stress sets, or in CTest.
+  - It appears only within about 3e-9 of a multi-revolution minimum time: 309 cases of adversarial category 10, which places `t` a few ulps from `t_min`, and stress cases with `t/t_min - 1` from 1e-12 to 2.6e-9.
+  - There the root is `sqrt(t - t_min)`-conditioned. The flagged cases' worst error is 1.6e-8, against 2.7e-11 for the unflagged ones in the same category, so the flag marks exactly the inherently inaccurate results.
+- **Tests.** Status 2 counts as a failure in every test outside that zone:
+  - `test_excali_standalone` and the Lamberts-Comparison tests accept only status 0 or 1;
+  - `test_excali_minimum` checks `t/t_min - 1` from 1e-6 to 1e-1;
+  - the stress harnesses count any other status as a failure.
+
+  A future starter or width regression therefore shows up as a test failure, not as a wrong velocity. MATLAB's accuracy tables count status 2 as a valid solution and measure its error as usual.

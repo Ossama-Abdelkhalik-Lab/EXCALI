@@ -119,7 +119,7 @@ contains
       endif
       if(.not.ieee_is_finite(tt).or..not.ieee_is_finite(vscale).or.tt<=0.or.vscale<=0)return
       call excali_one(r1/sc,r2/sc,tt,direction,v1,v2,status,half,nrev,branch,plane_normal)
-      if(status==0.or.status==1)then
+      if(status>=0.and.status<=2)then
          v1=v1*vscale;v2=v2*vscale
       endif
    end subroutine
@@ -459,12 +459,12 @@ contains
    integer,intent(out)  :: statc(nc),halfc(nc)
    real(dp),optional,intent(in) :: pnormal(3)
    type(frame) :: gc(nb)
-   real(dp) :: xc(nb),cc(nb),hsc(nb),hcc(nb),wbc(nb),lbc(nb),ubc(nb),ddc(nb),elc,vsc,chord,semi
+   real(dp) :: xc(nb),cc(nb),hsc(nb),hcc(nb),wbc(nb),lbc(nb),ubc(nb),ddc(nb),dec(nb),rbc(nb),elc,vsc,chord,semi
    integer :: kc(nb),kd(nb),krc(nb),accc(nb),j
    logical :: fast(nb),nearc(nb),trig(nb),eightc(nb)
    ! Stage 1: geometry; the multi-revolution tables.
    do j=1,nc
-      fast(j)=.false.;nearc(j)=.false.;halfc(j)=0;statc(j)=-1
+      fast(j)=.false.;nearc(j)=.false.;halfc(j)=0;statc(j)=-1;rbc(j)=0;krc(j)=0
       if(abs(dirc(j))/=1.or.nrev(j)<0.or.abs(branch(j))/=1.or..not.(tofc(j)>0) &
          .or..not.ieee_is_finite(tofc(j)))cycle
       call geometry(r1c(:,j),r2c(:,j),tofc(j),dirc(j),gc(j),statc(j),halfc(j),pnormal)
@@ -510,14 +510,14 @@ contains
    enddo
    do j=1,nc
       if(.not.fast(j).or.kc(j)==0)cycle
-      call fast_coordinate(kc(j),xc(j),nrev(j),gc(j)%b,wbc(j),lbc(j),ubc(j),accc(j),kd(j),cc(j),elc,eightc(j),hsc(j),hcc(j))
+      call fast_coordinate(kc(j),xc(j),nrev(j),gc(j)%b,wbc(j),lbc(j),ubc(j),accc(j),kd(j),cc(j),elc,rbc(j),eightc(j),hsc(j),hcc(j))
       fast(j)=elc>0;krc(j)=kexp(elc)
    enddo
    ! Stage 3: one rectangle each, then its acceptance.
    do j=1,nc
-      ddc(j)=0
+      ddc(j)=0;dec(j)=0
       if(fast(j).and.kc(j)/=0.and.accc(j)>=0)call rect_ratio(kd(j),cc(j),hsc(j),hcc(j),krc(j),eightc(j),gc(j)%y0,merge(wbc(j),gc(j)%yend,kd(j)==-2),gc(j)%a,gc(j)%b, &
-         gc(j)%t,nrev(j),ddc(j))
+         gc(j)%t,nrev(j),ddc(j),dec(j))
    enddo
    do j=1,nc
       if(fast(j).and.kc(j)/=0)call fast_accept(kd(j),cc(j),ddc(j),hsc(j),hcc(j),kc(j),xc(j),fast(j))
@@ -526,7 +526,10 @@ contains
    do j=1,nc
       trig(j)=.true.
       if(fast(j))then
-         statc(j)=0
+         ! Status 2: solved, low confidence. The error estimate de (relative to
+         ! the half-width L) exceeds 1e-8 of the singularity bound R: a starter
+         ! or width regression. Never observed; the tests assert it.
+         statc(j)=merge(2,0,dec(j)>1e-8_dp*rbc(j)*pow2m(krc(j)))
          if(kc(j)==0)then
             kc(j)=1;xc(j)=0;hsc(j)=0;hcc(j)=1              ! parabola
          endif
@@ -540,11 +543,11 @@ contains
             endif
          endif
       endif
-      if(statc(j)==0.or.statc(j)==1)then
+      if(statc(j)>=0.and.statc(j)<=2)then
          call velocities(gc(j),r1c(:,j),r2c(:,j),dirc(j),kc(j),xc(j),hsc(j),hcc(j),nearc(j),v1c(:,j),v2c(:,j))
          if(.not.all(ieee_is_finite(v1c(:,j))).or..not.all(ieee_is_finite(v2c(:,j))))statc(j)=-4
       endif
-      if(statc(j)/=0.and.statc(j)/=1)then
+      if(statc(j)<0.or.statc(j)>2)then
          v1c(:,j)=ieee_value(0.0_dp,ieee_quiet_nan);v2c(:,j)=v1c(:,j)
       endif
    enddo
@@ -777,15 +780,15 @@ contains
       ! class acc; X 8 nodes at |X|/8 (or less); multiple revolutions 8 nodes
       ! at R/16. kexp rounds el down to a power of two (el<=1 keeps the node
       ! tables in range).
-      pure subroutine fast_coordinate(k,x,m,b,wb,lo,hi,acc,kind1,c,el,eight,hs,hc)
+      pure subroutine fast_coordinate(k,x,m,b,wb,lo,hi,acc,kind1,c,el,rb,eight,hs,hc)
          integer,intent(in)::k,m,acc
          real(dp),intent(in)::x,b,wb,lo,hi
          integer,intent(out)::kind1
-         real(dp),intent(out)::c,el,hs,hc
+         real(dp),intent(out)::c,el,rb,hs,hc
          logical,intent(out)::eight
          hs=0;hc=1;kind1=k;c=x;eight=.true.
          if(m>0)then
-            el=min(c-lo,hi-c)/8
+            el=min(c-lo,hi-c);rb=el;el=el/8
             call sincos_half(c,hs,hc)
             return
          elseif(abs(k)==1.and.x<.3_dp)then
@@ -793,7 +796,7 @@ contains
             el=min(abs(c),.2_dp-abs(c))
             if(k>0)el=min(2*abs(c),.2_dp-abs(c))
             if(k<0.and.b>0)el=min(el,wb*wb-abs(c))
-            el=el/16
+            rb=el;el=el/16
             return
          elseif(k>0)then
             el=min(c,pi-c)                   ! k=2: x is already pi-v
@@ -808,6 +811,7 @@ contains
             if(b>0)el=min(2*c,wb-c,pi)
             call shch(c/2,hs,hc)
          endif
+         rb=el
          select case(acc)
           case(0)
             el=el/256;eight=.false.
@@ -940,13 +944,13 @@ contains
       err=abs(q2/q0-d*d)/(hi-lo)
    end subroutine
 
-   pure subroutine rect_ratio(kind1,c,hs,hc,kr,eight,y0,yend,a,b,t,m,dd)
+   pure subroutine rect_ratio(kind1,c,hs,hc,kr,eight,y0,yend,a,b,t,m,dd,de)
       integer,intent(in)::kind1,kr,m
       real(dp),intent(in)::c,hs,hc,y0,yend,a,b,t
       logical,intent(in)::eight
-      real(dp),intent(out)::dd
+      real(dp),intent(out)::dd,de
       real(dp),dimension(n1+2)::uu,wq,ct,st,f,f1
-      real(dp)::el,q0,q1,r0,r1,fa,fb,x,sh,ch,sn,cn,rs,yv,y1,ff,ff1,q,g,g1,ser,ser1,pk,y00,ab,mt,sb,cb
+      real(dp)::el,q0,q1,q2,r0,r1,r2,fa,fb,x,sh,ch,sn,cn,rs,yv,y1,ff,ff1,q,g,g1,ser,ser1,pk,y00,ab,mt,sb,cb
       integer::np,j,n
       logical::lw,us
       el=pow2m(kr)
@@ -1047,27 +1051,35 @@ contains
             endif
          enddo
       end select
-      ! Q[g'] = g(c+L)-g(c-L) - L*sum w g'(x) for g = f, (x-c)f; dd=Q1/Q0.
+      ! Q[g'] = g(c+L)-g(c-L) - L*sum w g'(x) for g = f, (x-c)f, (x-c)**2 f;
+      ! dd=Q1/Q0 is the root's offset. de=|Q2/Q0-dd**2| vanishes for a single
+      ! pole: it monitors the result (status 2 when large), it never re-solves.
       ! Two interleaved partial sums shorten the dependent chain.
       fb=f(np-1);fa=f(np)
-      q0=0;q1=0;r0=0;r1=0
+      q0=0;q1=0;q2=0;r0=0;r1=0;r2=0
       do j=1,np-3,2
          x=el*uu(j)
          q0=q0+wq(j)*f1(j)
          q1=q1+wq(j)*(x*f1(j)+f(j))
+         q2=q2+wq(j)*x*(x*f1(j)+2*f(j))
          x=el*uu(j+1)
          r0=r0+wq(j+1)*f1(j+1)
          r1=r1+wq(j+1)*(x*f1(j+1)+f(j+1))
+         r2=r2+wq(j+1)*x*(x*f1(j+1)+2*f(j+1))
       enddo
       if(mod(np,2)==1)then
          j=np-2;x=el*uu(j)
          q0=q0+wq(j)*f1(j)
          q1=q1+wq(j)*(x*f1(j)+f(j))
+         q2=q2+wq(j)*x*(x*f1(j)+2*f(j))
       endif
       q0=fb-fa-el*(q0+r0)
       q1=el*(fb+fa)-el*(q1+r1)
+      q2=el*el*(fb-fa)-el*(q2+r2)
       dd=q1/q0
+      de=abs(q2/q0-dd*dd)
       if(.not.(dd==dd))dd=huge(dd)
+      if(.not.(de==de))de=huge(de)
    end subroutine
 
 
