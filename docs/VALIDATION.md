@@ -524,3 +524,15 @@ The multi-revolution table rectangle no longer carries a certificate, and the ce
 
   Making `mrev_fold` a module procedure instead of an internal one was slower (166 ns).
 - **Size:** `src/excali_tables.inc` grows by about 1,860 lines (the 11,264-value `mr_q` against 2,816 for `mr_v`).
+
+## Near-parabolic series final at the rounding floor (2026-11-05)
+
+Lamberts-Comparison CI (Linux x86-64) failed `test_excali`: 4 of 10,011 cases within 1e-12 of the parabolic time returned status -4. With `X` around 1e-13, `T - t` at the rectangle's nodes is a few hundred ulps, and on x86-64 one node rounded to exactly 0, so `Q1/Q0` was NaN. The region formula used to catch these; since the single path there was no recovery.
+
+- **Fix.** `near_parabola_x` also returns the relative size `rc` of its second-order term. When `|rc| < 1e-8` the dropped third-order term is about `rc^2`, so the series is the root to rounding and no rectangle is evaluated (accuracy class -1).
+- **First attempt rejected:** an absolute threshold `|X| < 1e-6` raised zero_rev category 3 (degenerate ellipses) from 5 to 115 cases above 1e-10, because there `T''/T'` is large and the series is not converged at that `X`.
+- **Near-parabolic stress set** (60,000 cases, `t/t_p - 1 = ±1e-16..1e-2`, every geometry of the zero-revolution stress set):
+  - previous version: 0 failures on macOS, 1,551 on Linux x86-64 (gcc 14, Docker amd64);
+  - this version: 0 on both.
+  - Maximum arrival error 1.8e-12 on macOS (3.5e-12 before) and 1.7e-12 on x86-64 (4.3e-12).
+- **test_excali on x86-64:** parabolic worst 3.6e-14, 0 bad. Truth sets unchanged in every category.
