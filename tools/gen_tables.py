@@ -32,10 +32,14 @@ interpolated in mu at run time, |tau| <= TM:
   location) on a fine tau grid of MR_NC points;
   mr_q(:,:,h,k) = branch root normalized by its two anchors on tau x |sigma|,
   sigma = branch*sqrt(1-(t_min/t)**(1/3)), one half per branch (h=1: sigma<0,
-  h=2: sigma>0): q = (v - v*)/(sigma*(P - v*)), P = 0 or pi the pole on the
+  h=2: sigma>0): q = (v - v*)/(|sigma|*(P - v*)), P = 0 or pi the pole on the
   branch's side. q is smooth on each half, tends to sqrt(6 t_min/T''(v*))/|P-v*|
-  at the fold and to 1 at the pole, where v = v* + sigma*(P-v*)*q hits P exactly
-  whatever the error of the interpolated v*. With 32 tau points and 16 |sigma|
+  at the fold and to 1 at the pole, where v = v* + |sigma|*(P-v*)*q hits P exactly
+  whatever the error of the interpolated v*. The table stores
+  g = (q - 1)/(1 - |sigma|), finite at the pole, so the pole distance
+  (1 - |sigma| q)|P - v*| = (1-|sigma|)(1 - |sigma| g)|P - v*| with
+  1 - |sigma| = r/(1+|sigma|), r = (t_min/t)**(1/3), keeps full precision as
+  t -> infinity (storing q itself leaves a 1e-9 offset at the pole). With 32 tau points and 16 |sigma|
   points it is within 2.5% of |v - v*| (or the pole distance) for |sigma| >=
   1e-3, so the rectangle needs no certificate (the old 16x16 table of v itself
   was off by up to 8 times |v - v*| near the fold). mr_c decides
@@ -176,7 +180,7 @@ def multi_rev(n):
             S = br * np.clip(sg, 1e-7, 1 - 1e-9)
             L, SS = np.meshgrid(lg, S, indexing='ij')
             P = np.pi if br > 0 else 0.0
-            V[:, :, h, k] = (branch_v(L, SS, m) - vg[:, None]) / (SS * (P - vg[:, None]))
+            V[:, :, h, k] = ((branch_v(L, SS, m) - vg[:, None]) / (np.abs(SS) * (P - vg[:, None])) - 1) / (1 - np.abs(SS))
         tm, vs = tmin_v(lc, m)
         # T scales as s_L**1.5 (canonical s_L = 2/(1+lam**2)).
         C[:, k] = np.cbrt(tm / m) / np.sqrt(2 / (1 + lc * lc)); VS[:, k] = vs
@@ -346,7 +350,7 @@ def write(out, n, A, B, PA, PB, LB, HS, HL, V, C, VS):
         f.write(f"   integer,parameter::tabb_n={LB.shape[0]}\n")
         arr(f, "tabb", LB)
         block(f, "tabh", (HS, HL))
-        f.write(f"   ! Multiple revolutions (slices in mu = 1/m, last ~infinity): mr_q(tau,|sigma|,branch,k) = (v-v*)/(sigma*(P-v*)),\n")
+        f.write(f"   ! Multiple revolutions (slices in mu = 1/m, last ~infinity): mr_q(tau,|sigma|,branch,k) = ((v-v*)/(|sigma|*(P-v*)) - 1)/(1-|sigma|),\n")
         f.write(f"   ! mr_c(tau,k) = cbrt(t_min/m)/sqrt(s_L), mr_s(tau,k) = v*; |tau| <= {TM}.\n")
         f.write(f"   integer,parameter::mr_nt={V.shape[0]},mr_ns={V.shape[1]},mr_nm={len(MR_M)},mr_nc={MR_NC}\n")
         f.write("   real(dp),parameter::mr_mu(mr_nm)=[" + ",".join(f"{1 / m:.17e}_dp" for m in MR_M) + "]\n")

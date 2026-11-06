@@ -536,3 +536,36 @@ Lamberts-Comparison CI (Linux x86-64) failed `test_excali`: 4 of 10,011 cases wi
   - this version: 0 on both.
   - Maximum arrival error 1.8e-12 on macOS (3.5e-12 before) and 1.7e-12 on x86-64 (4.3e-12).
 - **test_excali on x86-64:** parabolic worst 3.6e-14, 0 bad. Truth sets unchanged in every category.
+
+## Multi-revolution robustness and the dead whole-interval path (2026-11-05)
+
+A larger multi-revolution stress run (120,000 cases), plus a run with times up to 1e48 `t_min`, found three faults:
+
+1. **Region-formula failures.** 5 cases failed (status -4) in both this version and the previous one. All were right-branch roots at transfer angles within 1e-3 of 0 or 360 degrees. `branch_fixed`'s one 24-node ratio over the whole `d` interval (length about 3) ended about 1e-9 short of its own test, with the root near the end close to the `v = 0` pole. The `d` and `v` intervals are now cut into pieces of length at most 1/2, as `zeta` already was; error estimates fall to 3e-15 or less and the failures to 0.
+2. **Huge times.** At `t` up to 1e48 `t_min`, 3,116 of 18,000 cases fell back to `general_root`. The starter `v* + |sigma| (P - v*) q` rounded onto the pole. The table now stores `g = (q - 1)/(1 - |sigma|)`, which is finite at the pole, and the starter is formed as the pole distance `(1 - s)(1 - s g)|P - v*|` with `1 - s = r/(1 + s)`. That is exact as `t -> infinity`, and the starter comes back in the rectangle's own coordinate. Storing `q - 1` alone still left a 1e-9 offset at the pole (from the grid's `1 - 1e-9` end sample).
+3. **The fold boundary.** At `t = t_min (1 - 16 eps)` the infeasibility test and the fold test rounded in opposite directions, and `sqrt(1 - t_min/t)` was NaN. Both tests now use the single quantity `t_min/t`.
+
+**Dead code.** `general_root` is reached only off the multi-revolution tables (`abs(tau) > 0.9`). There `abs(b/(y0 + b)) >= 0.999985` over 4 million sampled geometries, so the whole-interval branch of `mrev_global` (`abs(b/(y0+b)) <= 0.95`) and its node tables are gone.
+
+**Results:**
+- Huge times: 0 fallbacks from `t_min` to 1e48 `t_min`.
+- Multi-revolution stress: 0 failures in 120,000 cases (the previous version: 5) and 0 in 24,000.
+- Zero-revolution, hyperbolic and near-parabolic stress sets: unchanged, 0 failures.
+- Truth sets: unchanged in every category.
+- `test_excali` on Linux x86-64 (Docker): 0 bad.
+- CTest: 9/9 and 3/3 (Release, Debug).
+- Batch timings: equal to the previous version.
+
+## Confidence flag on the final rectangle (2026-11-05)
+
+Every final rectangle again computes its second moment. `de = |Q2/Q0 - (Q1/Q0)^2|` vanishes for a single pole. When `de/L > 1e-8 R` (`L` the half-width, `R` the singularity bound), the case returns status 2, "solved, low confidence". The velocities are returned and nothing is re-solved. It costs about 1.5 ns per single solve (circular microbenchmark, best of 15) and 3-5 ns per case in batch.
+
+- **Where it appears.** It never appears in the zero-revolution truth sets (largest `de/(R L)` = 4.8e-11), harness_mixed, dev, multirev (1.4e-9), the 40,000 zero-revolution, 100,000 hyperbolic or 60,000 near-parabolic stress sets, or in CTest.
+  - It appears only within about 3e-9 of a multi-revolution minimum time: 309 cases of adversarial category 10, which places `t` a few ulps from `t_min`, and stress cases with `t/t_min - 1` from 1e-12 to 2.6e-9.
+  - There the root is `sqrt(t - t_min)`-conditioned. The flagged cases' worst error is 1.6e-8, against 2.7e-11 for the unflagged ones in the same category, so the flag marks exactly the inherently inaccurate results.
+- **Tests.** Status 2 counts as a failure in every test outside that zone:
+  - `test_excali_standalone` and the Lamberts-Comparison tests accept only status 0 or 1;
+  - `test_excali_minimum` checks `t/t_min - 1` from 1e-6 to 1e-1;
+  - the stress harnesses count any other status as a failure.
+
+  A future starter or width regression therefore shows up as a test failure, not as a wrong velocity. MATLAB's accuracy tables count status 2 as a valid solution and measure its error as usual.
