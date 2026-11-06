@@ -569,3 +569,50 @@ Every final rectangle again computes its second moment. `de = |Q2/Q0 - (Q1/Q0)^2
   - the stress harnesses count any other status as a failure.
 
   A future starter or width regression therefore shows up as a test failure, not as a wrong velocity. MATLAB's accuracy tables count status 2 as a valid solution and measure its error as usual.
+
+## Single path for multiple revolutions off the tables (2026-11-05)
+
+`mrev_edge` replaces `general_root` (`mrev_global`, `branch_fixed`, `ratio_root`, `zeval`) and the 24- and 32-point rules. Multiple revolutions off the tables (`abs(tau) > 0.9`) now take the same three steps as everything else, and every case in EXCALI takes one path.
+
+- **Coordinate.** `zeta` about the crowded pole, `sin(x/2) = s0 sinh(zeta)`, `x = v` (short way) or `pi - v` (long way). There `y = y_c cosh^2(zeta)` exactly, and `T = A coth^3(zeta)/cos^3(x/2) + sqrt(y_c) cosh(zeta) (±y_c cosh^2(zeta) G(x) + a)`. Each term is evaluated directly, with `zeta`-derivatives to third order by Taylor arithmetic (`jmul`, `jcomp`). In `v`, `T'` near `v*` cancels about 30 digits once `1 - abs(tau)` falls below about `1e-10`, so a double-precision formula in `v` cannot locate the minimum there.
+- **Minimum time.** One 8-node ratio of `1/T'` over half-width 2 about the large-`m` estimate puts `v*` within 3.7e-5 of its bound in `zeta` (1.8e-9 in `x`). A second 8-node ratio at bound/16 then reproduces a 32-node ratio's `v*` to rounding (3.7e-16 relative). Feasibility decided by `t_min = T(v*)` matched 50-digit minima within 2e-15 to 4e-15 in 40 random cases. That is inside the 16-ulp `t = t_min` tolerance.
+- **Starter** (`Delta = (t - t_min)/abs(t_min - A)`, `A = n pi abs(b)^1.5/4`):
+  - Near the fold: the fold series in `zeta`.
+  - Crowded side, short way: the layer cubic `2w^3 - D w^2 + 1 = 0` fitted at `zeta*`. Below `zeta = 2.5` it uses `alpha coth^3(zeta) + beta cosh(zeta)` fitted exactly at `zeta*`, with `cosh` taken at the layer-only root. The plain `atanh((A/t)^(1/3))` reached 0.24 of the bound at `abs(tau) = 0.91`; the fit cuts that to 0.04.
+  - Crowded side, long way: `atanh`, the fold model, the plateau cubic or the anchored body.
+  - Far side: the body limits simplify to `4 theta cos^3(x/2) = n pi + (x + sin x)` (short way) and `n pi - (x + sin x)` (long way).
+    - Short way: three fixed Newton steps in log form invert it (6e-6). Within `8 v*` of the far pole the inverse is final; otherwise its secant slope from `v*` sets the fold cubic. The cubic alone overshoots by about `v*/2` as the root nears the pole: 0.34 to 3.5 of the bound for `(pi - v)/v* < 2`, where the body inverse is within 1e-3.
+    - Long way: the body minimum takes two Newton steps (5e-8). Each branch takes two steps in `sqrt(log Tb - log Tb_min)`, which is regular through that minimum (1e-6).
+  - The four-term fold model takes three steps in `x` or `1/x` (1e-4).
+  - All cubics are solved in closed form; `cubic_pos` also replaces `long_d`'s inline cubic.
+- **Rectangle.** 8 nodes at bound/4. It is in `zeta` when the starter has `x < 1`, otherwise in `x`, or in `pi - x` above `3 pi/4`. In `x` near `pi`, `pi - x` keeps only absolute precision: the far-branch velocities were up to 30 times less accurate than the old path's until this was added.
+
+Validation:
+
+- **New stress set, `abs(tau) > 0.9`.** 10,000 geometries × 4 time bands:
+  - transfer angle `10^-7` to `0.4` rad from 0 or 360 degrees, `1 - r2/r1` from `1e-9` to `0.1` or 0;
+  - both directions (an earlier run used direction +1 only, which never reaches the long way);
+  - `m` from 1 to 30,000;
+  - `t/t_min - 1` in `[1e-12, 1e-8]`, `[1e-8, 1e-4]` and `[1e-4, 1e4]`, plus infeasible times.
+
+  | | old path | `mrev_edge` |
+  |---|---|---|
+  | status -4 | 5,890 of 40,000 | 0 |
+  | status 2 | 0 | 6,936, all with `t/t_min - 1 <= 2.7e-9` |
+  | worst arrival error, `t/t_min - 1` in `[1e-12, 1e-8]` | 5.4e-12 | 5.6e-12 |
+  | worst arrival error, `[1e-8, 1e-4]` | 5.2e-9 | 6.1e-12 |
+  | worst arrival error, `[1e-4, 1e4]` | 3.4e-4 | 3.4e-4 (same case) |
+  | 10 times worse than the other, where both solve | 205 | 38 |
+
+  Arrival errors are by quad-precision Kepler propagation. In all 38 cases where `mrev_edge` was 10 times worse, the two velocity vectors differ by at most 4.7e-15. Arrival errors at large `m` and long `t` sit at the rounding floor: in the worst case, one ulp in `v1` moves the arrival error from 1.0e-4 to 2.75e-4. Feasibility disagreed in 693 cases. All were below `t_min`, where the old path failed with -4 and `mrev_edge` returned 5. In 29 sampled cases, 50-digit minima put `t` below `t_min` by 5e-9 to 1e-5.
+- **Extreme set.** 5,000 geometries with transfer angles down to `1e-12` rad and `1 - r2/r1` down to `1e-15`. The old path failed in 10,498 of 20,000 cases, `mrev_edge` in none. Its worst arrival error, 1.5e-4 at `m = 30,000` and `t/t_min ~ 1e4`, is again at the one-ulp floor.
+- **Everything else.**
+  - Truth-set summaries are identical to the previous version.
+  - Stress sets show 0 failures: 40,000 zero-revolution, 100,000 hyperbolic and 60,000 near-parabolic.
+  - Multi-revolution 24,000 and 120,000: results unchanged, with status 2 only within 2.6e-9 of `t_min`.
+  - Huge times: all 18,000 solved.
+  - CTest passes 3/3 here and 9/9 in Lamberts-Comparison. On Linux x86-64 (Docker `gcc:14`, amd64), `test_excali` passes and a 10,000-case `abs(tau) > 0.9` stress run matches macOS.
+  - No case with `abs(tau) <= 0.9` reaches `mrev_edge` in the 120,000-case set.
+  - Rerun with both directions: the earlier 120,000-case multi-revolution and huge-time sets used direction +1 only, so the table path's long way had not been stress-tested. Results: 0 failures, status 2 only within 2.5e-9 of `t_min`, worst arrival error 1.9e-9 (2.8e-9 for the reference version); all 18,000 huge-time cases solved.
+- **Speed.** `abs(tau) > 0.9` single solves take 2.22 µs, against 2.23 µs for the old path, which fails on 7% of them. A 32-node first ratio cost 2.93 µs: `libm` calls dominate each node, about 55 ns. Batch timing on the truth sets is unchanged: multirev 216.5 against 217.7 ns, zero_rev 182 to 183 ns.
+- **Size.** `src/excali_solver.f90` is 1,675 lines (1,658 before).
