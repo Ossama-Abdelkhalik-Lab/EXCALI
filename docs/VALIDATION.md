@@ -613,5 +613,6 @@ Validation:
   - Huge times: all 18,000 solved.
   - CTest passes 3/3 here and 9/9 in Lamberts-Comparison. On Linux x86-64 (Docker `gcc:14`, amd64), `test_excali` passes and a 10,000-case `abs(tau) > 0.9` stress run matches macOS.
   - No case with `abs(tau) <= 0.9` reaches `mrev_edge` in the 120,000-case set.
+  - Rerun with both directions: the earlier 120,000-case multi-revolution and huge-time sets used direction +1 only, so the table path's long way had not been stress-tested. Results: 0 failures, status 2 only within 2.5e-9 of `t_min`, worst arrival error 1.9e-9 (2.8e-9 for the reference version); all 18,000 huge-time cases solved.
 - **Speed.** `abs(tau) > 0.9` single solves take 2.22 µs, against 2.23 µs for the old path, which fails on 7% of them. A 32-node first ratio cost 2.93 µs: `libm` calls dominate each node, about 55 ns. Batch timing on the truth sets is unchanged: multirev 216.5 against 217.7 ns, zero_rev 182 to 183 ns.
 - **Size.** `src/excali_solver.f90` is 1,675 lines (1,658 before).
