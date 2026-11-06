@@ -641,3 +641,27 @@ Validation:
   - Results: truth sets unchanged (adversarial category 17 maximum 2.3e-14 to 5.4e-14). 7,887 of the 10,000 multi-revolution truth cases change in the last bits, at most 2.4e-11 relative, with every summary the same. zs2, hs, ps, ms, ms4d and both `abs(tau) > 0.9` stress sets are identical. Timing unchanged.
 - **Table totals.** 20,352 values (606 KB source, 163 KB compiled) became 13,696 values (155 KB source, 55 KB compiled).
 - **Linux x86-64** (Docker gcc:14, amd64): CTest 3/3; the comparison repository's EXCALI test agrees with the contour solver in all five classes (0 bad); the `abs(tau) > 0.9` stress set (10,000 cases) and the extreme variant have no `-4`.
+
+## One elliptic table (2026-11-06)
+
+The zero-revolution elliptic starters `tab` (`abs(tau) <= 0.9`, split at `s = 1/2`) and `tabp` (`tau >= 0.75`, split at `v = pi/2`) became one table, `tabe`. It uses `tabp`'s layout for every `tau` in `[-0.9, 1-1e-6]`, on a grid uniform in `sign(tau)(1 - sqrt(1 - abs(tau)))`, so it is fine toward both ends. The pole side stores `(pi-v)/(s1 (K/T_half)^(1/3))`, `s1 = (T_half/t)^(1/3)`; the parabola side stores `v^2/(s2 (s2 + 2 e0))`, `s2 = (t-t_p)/(T_half-t_p)`. With the old one-sided grid (`1 - sqrt(1 - tau)`) the same layout reached 27% at `tau = -0.7`; the symmetric grid fixes that.
+
+- **Size.** 40 `tau` points by 32: 2,560 values instead of 4,096. Ellipse starter formulas 8 to 6 (series, the table's two sides, `long_d`'s three pieces). Table totals 13,696 to 12,160 values.
+- **Starter error** (Python mirror, 40,000 cases, relative to `min(v, pi-v)`):
+
+  | `tau` | max error | rectangle |
+  |---|---|---|
+  | `[-0.9, -0.8)` | 5.9% | 8 nodes, bound/4 |
+  | `[-0.8, -0.6)` | 1.5% | 8 nodes, bound/8 |
+  | `[-0.6, 0.4)` | 0.14% | 3 nodes, bound/256 |
+  | `[0.4, 1)` | 3.2e-5 | 3 nodes, bound/256 |
+
+  The old `tab` was within 0.11% for `abs(tau) < 0.75` and 3.9% to 0.9, with 8 nodes at bound/8 from `-0.75`. `-0.75 <= tau < -0.6` now takes 8 nodes, and `-0.9 <= tau < -0.8` bound/4.
+- **Results.** Truth sets: zero_rev, harness_mixed, multirev and infeasible identical; adversarial category 16 maximum 6.8e-16 to 9.3e-16, dev category 1 7.22e-15 to 7.24e-15. zs2 (40k), hs (100k), ps (60k): 0 failures, no velocity differs from the previous build by more than 1e-10. ms, ms4d, `abs(tau) > 0.9` stress and the extreme variant: identical.
+- **Timing** (20,000 random zero-revolution ellipses, interleaved, machine under load): single 178-184 ns before, 177-179 after; batch 110-115 before, 111-117 after. Unchanged within noise.
+- **Linux x86-64** (Docker gcc:14, amd64): the comparison repository's EXCALI test, 0 bad in all five classes; the `abs(tau) > 0.9` stress set and the extreme variant have no `-4`.
+- **Alternatives studied** (Python mirror of the rectangle, same error measure):
+  - Two rectangles with a 12×12×2 table (288 values) reach rounding level, but a second rectangle costs 41% single and 55% batch.
+  - A fixed-node rectangle over all of `[0, pi]` in `X = v^2`, then a local rectangle, reaches rounding level for `abs(tau) <= 0.9` with no table, but fails toward `abs(tau) = 1`, where a singularity approaches the interval's end.
+  - Izzo's starter and the bare pole and parabola asymptotes miss by about 100% of the bound near the ends, even with three rectangles.
+  - No table reaches `tau < -0.9`: the long-way layer of width `eta^(2/3)` needs `long_d`.

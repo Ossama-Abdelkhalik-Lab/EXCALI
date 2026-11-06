@@ -6,16 +6,11 @@ A zero-revolution root depends only on the Lancaster-Blanchard parameter lam
 and on the time relative to the parabolic time tp. All grids are uniform in
 tau = lam/(1+sqrt(1-lam**2)).
 
-Short-way ellipses toward tau -> 1 (tau in PP): tabp, split at v = pi/2; see
-short_way().
-
-Ellipse (t > tp), root v (half the eccentric-anomaly change), s = (tp/t)**(1/3),
-|tau| <= 0.9 (the solver uses it below tau = 0.75): tab(:,:,1) = (pi - v)/(s*ck) for s in [0, 1/2], ck = (K/tp)**(1/3)
-with the pole asymptote T ~ K/(pi-v)**3, K = pi*y(pi)**1.5/sqrt2, and
-tab(:,:,2) = v**2*T0'/(t - tp) for s in [1/2, 1], T0' = dT/d(v**2) at the
-parabola. Both tend to 1 at their ends (t -> infinity, t -> tp), and the
-normalization absorbs the sqrt(y) branch point's approach to the parabola as
-|tau| grows, so the table is about three times more accurate there.
+Ellipse (t > tp), root v (half the eccentric-anomaly change): one table tabe
+for tau in [TE0, TE1] on a grid uniform in z = sign(tau)*(1 - sqrt(1 - |tau|))
+(fine toward both ends), split at v = pi/2 (T_half = T(pi/2)); see ellipse().
+Below TE0 (transfers near 360 degrees) the solver uses the closed-form
+long-way starter with the tabb body.
 
 Hyperbola (t < tp), root w (half the hyperbolic-anomaly change), u = t/tp in
 [UH, 1], on sqrt|tau| uniform in [0, sqrt(TOP)]: short way
@@ -97,16 +92,6 @@ def T_v(v, a, b, y0, yend, m=0):
         ser = ser * x + p
     F = np.where((v < .3) & (m == 0), ser / S2, (v + m * PI - sv * cv) / (S2 * sv ** 3))
     return np.sqrt(y) * (y * F + a)
-
-
-def root_v(lam, s):
-    a, b, y0, yend, tp = geom(lam); t = tp / s ** 3
-    lo = np.zeros_like(lam); hi = np.full(lam.shape, PI)
-    for _ in range(80):
-        mid = 0.5 * (lo + hi)
-        f = T_v(mid, a, b, y0, yend) < t
-        lo = np.where(f, mid, lo); hi = np.where(f, hi, mid)
-    return 0.5 * (lo + hi)
 
 
 def T_w(w, a, b, y0):
@@ -207,23 +192,13 @@ def multi_rev(n):
     return V, C, VS
 
 
-def zero_rev(n):
-    tau = np.linspace(-TM, TM, n); lam = 2 * tau / (1 + tau * tau)
-    su = np.linspace(0, .5, n); sl = np.linspace(.5, 1, n)
-    L, SU = np.meshgrid(lam, su, indexing='ij'); _, SL = np.meshgrid(lam, sl, indexing='ij')
-    SU = np.maximum(SU, 1e-7); SL = np.minimum(SL, 1 - 1e-7)
-    ck, dt = ell_scales(L)
-    A = (PI - root_v(L, SU)) / (SU * ck)
-    B = root_v(L, SL) ** 2 / ((SL ** -3 - 1) * dt)
-    return A, B
+TE0, TE1 = -0.9, 1 - 1e-6            # tau range of the elliptic table tabe
+NE_T, NE_S = 40, 32                    # its tau and s points
 
 
-PP = (0.75, 1 - 1e-6)                # tau range of the short-way table tabp
-
-
-def zp(tau):
-    """Grid coordinate of tabp: 1 - sqrt(1 - tau), fine as tau -> 1."""
-    return 1 - np.sqrt(1 - tau)
+def zc(tau):
+    """Grid coordinate of tabe: sign(tau)*(1 - sqrt(1 - |tau|)), fine toward both ends."""
+    return np.sign(tau) * (1 - np.sqrt(1 - np.abs(tau)))
 
 
 def half_scales(lam):
@@ -234,14 +209,20 @@ def half_scales(lam):
     return tp, np.sqrt(yh) * (yh * PI / (2 * S2) + a), PI * ypi ** 1.5 / S2
 
 
-def short_way(n):
-    """Short-way ellipses toward tau -> 1, split at v = pi/2 (T_half):
-    tabp(:,:,1) = (pi-v)/(s1*(K/T_half)**(1/3)) on s1 = (T_half/t)**(1/3), and
-    tabp(:,:,2) = v**2/(s2*(s2+2*e0)) on s2 = (t-tp)/(T_half-tp), e0 = tp/(T_half-tp),
-    which absorbs the sqrt(y) branch point's approach to the parabola."""
-    tau = 1 - (1 - np.linspace(zp(PP[0]), zp(PP[1]), n)) ** 2; lam = 2 * tau / (1 + tau * tau)
-    L, S = np.meshgrid(lam, np.linspace(0, 1, n), indexing='ij')
-    tp, th, K = half_scales(L); a, b, y0, yend, _ = geom(L)
+def ellipse(nt=NE_T, ns=NE_S):
+    """Every zero-revolution ellipse with tau in [TE0, TE1], split at v = pi/2 (T_half):
+    tabe(:,:,1) = (pi-v)/(s1*(K/T_half)**(1/3)) on s1 = (T_half/t)**(1/3) (pole side);
+    tabe(:,:,2) = v**2/(s2*(s2+2*e0)) on s2 = (t-tp)/(T_half-tp), e0 = tp/(T_half-tp)
+    (parabola side), which absorbs the sqrt(y) branch point's approach to the
+    parabola as tau -> 1. Both stay finite at their ends. The tau grid is fine
+    toward both ends; one table replaces the former tab (|tau| <= 0.9, split at
+    s = 1/2) and tabp (tau >= 0.75) with 2,560 values instead of 4,096 and the
+    same accuracy (0.35% of the singularity bound in the middle, 3.3% at
+    tau = -0.9, 3.2e-5 toward tau = 1)."""
+    z = np.linspace(zc(TE0), zc(TE1), nt); tau = np.sign(z) * (1 - (1 - np.abs(z)) ** 2)
+    lam = 2 * tau / (1 + tau * tau)
+    L, S = np.meshgrid(lam, np.linspace(0, 1, ns), indexing='ij')
+    tp, th, K = half_scales(L)
     s1 = np.maximum(S, 1e-7)
     A = (PI - root_t(L, th / s1 ** 3)) / (s1 * np.cbrt(K / th))
     s2 = np.clip(S, 1e-7, 1 - 1e-12); e0 = tp / (th - tp)
@@ -281,14 +262,6 @@ def root_t(lam, t):
         f = T_v(mid, a, b, y0, yend) < t
         lo = np.where(f, mid, lo); hi = np.where(f, hi, mid)
     return 0.5 * (lo + hi)
-
-
-def ell_scales(lam):
-    """ck = (K/tp)**(1/3) (pole asymptote) and tp/T0' (parabola), both scale-free."""
-    a, b, y0, yend, tp = geom(lam)
-    ypi = np.where(b >= 0, y0 + 2 * b, yend)
-    tv2 = y0 * np.sqrt(y0) / (5 * S2) + b * (np.sqrt(y0) / S2 + a / (2 * np.sqrt(y0))) / 2
-    return np.cbrt(PI * ypi ** 1.5 / (S2 * tp)), tp / tv2
 
 
 BT_NM = 8; BT_NA = 16; MU_S = 1 / PI; MU_L = 1 / (2 * PI)
@@ -345,30 +318,6 @@ def body_tables():
     return A, B, C
 
 
-def lagrange4(p):
-    return np.stack([-(p - 1) * (p - 2) * (p - 3) / 6, p * (p - 2) * (p - 3) / 2,
-                     -p * (p - 1) * (p - 3) / 2, p * (p - 1) * (p - 2) / 6])
-
-
-def interp(M, n, u_tau, u_s):
-    i = np.clip(np.floor(u_tau).astype(int) - 1, 0, n - 4); wt = lagrange4(u_tau - i)
-    j = np.clip(np.floor(u_s).astype(int) - 1, 0, n - 4); ws = lagrange4(u_s - j)
-    acc = np.zeros_like(u_tau)
-    for a in range(4):
-        for b in range(4):
-            acc += wt[a] * ws[b] * M[i + a, j + b]
-    return acc
-
-
-def estimate(A, B, n, lam, s):
-    tau = lam / (1 + np.sqrt(1 - lam * lam))
-    ut = (tau + TM) * ((n - 1) / (2 * TM))
-    ck, dt = ell_scales(lam)                    # the solver computes the one it needs
-    vA = PI - s * ck * interp(A, n, ut, s * 2 * (n - 1))
-    vB = np.sqrt(np.maximum(0, (s ** -3 - 1) * dt * interp(B, n, ut, (s - .5) * 2 * (n - 1))))
-    return np.where(s <= .5, vA, vB)
-
-
 def lit(x):
     """Shortest literal for float32(x) (correctly rounded on input)."""
     x = np.float32(x)
@@ -410,30 +359,27 @@ def arr(f, name, M):
         f.write("/\n")
 
 
-def write(out, n, A, B, PA, PB, LB, HS, HL, V, C, VS, BA, BB, BC):
+def write(out, n, EA, EB, LB, HS, HL, V, C, VS, BA, BB, BC):
     def block(f, name, mats):
         arr(f, name, np.stack(mats, axis=-1))
     with open(out, 'w') as f:
         f.write(f"   ! Generated by tools/gen_tables.py {n}; do not edit.\n")
         f.write(f"   ! Zero-revolution root tables on tau = lam/(1+sqrt(1-lam**2)).\n")
-        f.write(f"   ! Ellipse, |tau| <= {TM}, s = (tp/t)**(1/3): tab(:,:,1) = (pi-v)/(s*ck) on [0,1/2],\n")
-        f.write("   ! ck = (pi*y(pi)**1.5/(sqrt2*tp))**(1/3); tab(:,:,2) = v**2*T0'/(t-tp) on [1/2,1],\n")
-        f.write("   ! T0' = dT/d(v**2) at the parabola.\n")
-        f.write(f"   ! Hyperbola, sqrt|tau| in [0,sqrt({TOP})], u = t/tp in [{UH},1]: tabh(:,:,1) = w**2/((1-u)*wn**2),\n")
-        f.write("   ! wn**2 = L**2*(1-exp(-wb**2/L**2)), L = 1-log(u) (short way); tabh(:,:,2) = w**2/((1-u)*L**2) (long way).\n")
-        f.write(f"   integer,parameter::tab_n={n}\n   real(dp),parameter::tab_tmax={TM}_dp\n")
         f.write("   integer,private::ti_,tj_\n")
-        f.write(f"   real(dp),parameter::tabh_s1={np.sqrt(TOP):.17e}_dp,tabh_u0={UH}_dp\n")
-        block(f, "tab", (A, B))
-        f.write(f"   ! Short-way ellipses, tau in [{PP[0]},1-{1-PP[1]:.0e}], grid uniform in 1-sqrt(1-tau), split\n")
-        f.write("   ! at v=pi/2: tabp(:,:,1)=(pi-v)/(s1*(K/Th)**(1/3)), s1=(Th/t)**(1/3), Th=T(pi/2);\n")
-        f.write("   ! tabp(:,:,2)=v**2/(s2*(s2+2*e0)), s2=(t-tp)/(Th-tp), e0=tp/(Th-tp).\n")
-        f.write(f"   real(dp),parameter::tabp_z0={zp(PP[0]):.17e}_dp,tabp_z1={zp(PP[1]):.17e}_dp\n")
-        block(f, "tabp", (PA, PB))
+        f.write(f"   ! Ellipse, tau in [{TE0},1-{1-TE1:.0e}], grid uniform in z = sign(tau)*(1-sqrt(1-|tau|)),\n")
+        f.write("   ! split at v=pi/2: tabe(:,:,1)=(pi-v)/(s1*(K/Th)**(1/3)), s1=(Th/t)**(1/3), Th=T(pi/2),\n")
+        f.write("   ! K=pi*y(pi)**1.5/sqrt2; tabe(:,:,2)=v**2/(s2*(s2+2*e0)), s2=(t-tp)/(Th-tp), e0=tp/(Th-tp).\n")
+        f.write(f"   integer,parameter::tabe_nt={EA.shape[0]},tabe_ns={EA.shape[1]}\n")
+        f.write(f"   real(dp),parameter::tabe_z0={zc(TE0):.17e}_dp,tabe_z1={zc(TE1):.17e}_dp\n")
+        block(f, "tabe", (EA, EB))
         f.write("   ! Long-way limit tau -> -1, body d=pi-v from T/|b|**1.5=th, u=(th-1/3)/(pi/4-1/3):\n")
         f.write("   ! tabb(:,1)=v**2/u on [0,1/2], tabb(:,2)=d/(1-u) on [1/2,1].\n")
         f.write(f"   integer,parameter::tabb_n={LB.shape[0]}\n")
         arr(f, "tabb", LB)
+        f.write(f"   ! Hyperbola, sqrt|tau| in [0,sqrt({TOP})], u = t/tp in [{UH},1]: tabh(:,:,1) = w**2/((1-u)*wn**2),\n")
+        f.write("   ! wn**2 = L**2*(1-exp(-wb**2/L**2)), L = 1-log(u) (short way); tabh(:,:,2) = w**2/((1-u)*L**2) (long way).\n")
+        f.write(f"   integer,parameter::tab_n={n}\n   real(dp),parameter::tab_tmax={TM}_dp\n")
+        f.write(f"   real(dp),parameter::tabh_s1={np.sqrt(TOP):.17e}_dp,tabh_u0={UH}_dp\n")
         block(f, "tabh", (HS, HL))
         f.write(f"   ! Multiple revolutions (slices in mu = 1/m, last ~infinity): mr_q(tau,|sigma|,branch,k) = ((v-v*)/(|sigma|*(P-v*)) - 1)/(1-|sigma|),\n")
         f.write(f"   ! mr_c(tau,k) = cbrt(t_min/m)/sqrt(s_L), mr_s(tau,k) = v*; |tau| <= {TM}.\n")
@@ -452,10 +398,9 @@ def write(out, n, A, B, PA, PB, LB, HS, HL, V, C, VS, BA, BB, BC):
 if __name__ == "__main__":
     n = int(sys.argv[1]) if len(sys.argv) > 1 else 32
     out = sys.argv[2] if len(sys.argv) > 2 else "src/excali_tables.inc"
-    A, B = zero_rev(n)
-    PA, PB = short_way(n)
+    EA, EB = ellipse()
     LB = long_body()
     HS, HL = hyperbolic(n)
     V, C, VS = multi_rev(MR_NT)
     BA, BB, BC = body_tables()
-    write(out, n, A, B, PA, PB, LB, HS, HL, V, C, VS, BA, BB, BC)
+    write(out, n, EA, EB, LB, HS, HL, V, C, VS, BA, BB, BC)
