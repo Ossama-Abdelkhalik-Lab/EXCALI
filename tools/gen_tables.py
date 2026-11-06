@@ -39,13 +39,31 @@ interpolated in mu at run time, |tau| <= TM:
   g = (q - 1)/(1 - |sigma|), finite at the pole, so the pole distance
   (1 - |sigma| q)|P - v*| = (1-|sigma|)(1 - |sigma| g)|P - v*| with
   1 - |sigma| = r/(1+|sigma|), r = (t_min/t)**(1/3), keeps full precision as
-  t -> infinity (storing q itself leaves a 1e-9 offset at the pole). With 32 tau points and 16 |sigma|
-  points it is within 2.5% of |v - v*| (or the pole distance) for |sigma| >=
-  1e-3, so the rectangle needs no certificate (the old 16x16 table of v itself
-  was off by up to 8 times |v - v*| near the fold). mr_c decides
+  t -> infinity (storing q itself leaves a 1e-9 offset at the pole). Its grid
+  is 16 tau points clustered toward |tau| = TM (tau = TM*sin(1.45x)/sin(1.45),
+  x uniform) by 12 points uniform in sqrt|sigma|: within 1.4% of |v - v*| (or
+  the pole distance) for |sigma| >= 1e-2 in 4,000 random cases, where the
+  uniform 32 x 16 grid it replaced reached 2.8% (the old 16x16 table of v
+  itself was off by up to 8 times |v - v*| near the fold). mr_c decides
 feasibility outside a 1e-6 margin, so it needs MR_NC >= 128 and the m = 5
 slice (worst relative error 1.04e-7 for m = 1..40 and sampled m to 1000,
 including m between slices; 4.4e-7 at m = 5 when that slice is left out).
+
+Body limits of multiple revolutions off the tables (|tau| > 0.9): with
+mu = 1/M (short way, M = m*pi) or -1/M (long way, M = (m+1)*pi), the large-|b|
+time is T = M*|b|**1.5*Q(x)/4, Q(x) = (1 + mu*(x + sin x))/cos(x/2)**3, x = v
+(short way) or pi - v (long way). Q increases to infinity at pi; on the long way
+it has a minimum at x_b ~ 8|mu|/3, where db/(8|mu|/3) - 1 = mu**2*poly(mu**2)
+(BODY_DB, degree 4, 2e-8 for m >= 1). Inverse tables of the far side, 8 mu
+points by 16, uniform:
+  x <= pi/2: bt_a(:,:,1) = x/xq (short way, mu in [0,1/pi]), xq the root of
+  3xq**2/8 + 2*mu*xq = Q - 1, on xq/xq(pi/2); bt_a(:,:,2) = (x - x_b)/(xq - x_b)
+  (long way, |mu| in [0,1/(2pi)]), xq = x_b + sqrt(8*(Q - Q_b)/3), on
+  (xq - x_b)/(xq(pi/2) - x_b);
+  x >= pi/2: bt_b = cos(x/2)/c0, c0 = Q**(-1/3), on c0/c0(pi/2), signed mu in
+  [-1/(2pi),1/pi].
+Every value tends to a finite limit at its ends, so the interpolated root
+keeps its relative accuracy at x_b and at pi (within 3e-4 of min(x - x_b, pi - x)).
 
 Truth: bisection on EXCALI's T for the canonical geometry r1 = r2 = 1, with
 the parabolic series where the closed form cancels.
@@ -142,7 +160,8 @@ def hyperbolic(n):
     return out
 
 
-MR_M = [1, 2, 3, 4, 5, 6, 8, 12, 16, 32, 1000000]; MR_NT = 32; MR_NS = 16; MR_NC = 128
+MR_M = [1, 2, 3, 4, 5, 6, 8, 12, 16, 32, 1000000]; MR_NT = 16; MR_NS = 12; MR_NC = 128
+MR_TC = 1.45      # mr_q tau grid: tau = TM*sin(MR_TC*x)/sin(MR_TC), x uniform in [-1,1]
 
 
 def tmin_v(lam, m):
@@ -171,7 +190,8 @@ def branch_v(lam, sig, m):
 
 
 def multi_rev(n):
-    tg = np.linspace(-TM, TM, n); lg = 2 * tg / (1 + tg * tg); sg = np.linspace(0, 1, MR_NS)
+    tg = TM * np.sin(MR_TC * np.linspace(-1, 1, n)) / np.sin(MR_TC); lg = 2 * tg / (1 + tg * tg)
+    sg = np.linspace(0, 1, MR_NS) ** 2                 # uniform in sqrt|sigma|
     tc = np.linspace(-TM, TM, MR_NC); lc = 2 * tc / (1 + tc * tc)
     V = np.zeros((n, MR_NS, 2, len(MR_M))); C = np.zeros((MR_NC, len(MR_M))); VS = np.zeros_like(C)
     for k, m in enumerate(MR_M):
@@ -271,6 +291,60 @@ def ell_scales(lam):
     return np.cbrt(PI * ypi ** 1.5 / (S2 * tp)), tp / tv2
 
 
+BT_NM = 8; BT_NA = 16; MU_S = 1 / PI; MU_L = 1 / (2 * PI)
+
+
+def body_Q(x, mu):
+    return (1 + mu * (x + np.sin(x))) / np.cos(x / 2) ** 3
+
+
+def body_inv(Qv, mu, lo, hi):
+    """x on [lo, hi] (Q increasing there) with body_Q(x, mu) = Qv, by bisection."""
+    lo = np.broadcast_to(np.asarray(lo, float), np.shape(Qv)).copy()
+    hi = np.broadcast_to(np.asarray(hi, float), np.shape(Qv)).copy()
+    for _ in range(100):
+        m = .5 * (lo + hi); up = body_Q(m, mu) < Qv
+        lo = np.where(up, m, lo); hi = np.where(up, hi, m)
+    return .5 * (lo + hi)
+
+
+def body_db_poly():
+    """Coefficients (highest first) of (x_b/(8a/3) - 1)/a**2 in a**2, a = |mu|,
+    x_b the long-way minimum: a = 1/(x + sin x + 4 cos(x/2)**3/(3 sin(x/2)))."""
+    k = np.arange(40); a = MU_L * (1 - np.cos(PI * (k + .5) / 40)) / 2
+    lo = np.full_like(a, 1e-12); hi = np.full_like(a, 2.0)
+    for _ in range(200):
+        d = .5 * (lo + hi); up = 1 / (d + np.sin(d) + 4 * np.cos(d / 2) ** 3 / (3 * np.sin(d / 2))) < a
+        lo = np.where(up, d, lo); hi = np.where(up, hi, d)
+    return np.polyfit(a * a, (.5 * (lo + hi) / (8 * a / 3) - 1) / a ** 2, 4)
+
+
+def body_min(a, C):
+    """x_b and Q(x_b) - 1 (cancellation-free), as the solver computes them."""
+    db = 8 * a / 3 * (1 + a * a * np.polyval(C, a * a)); c = np.cos(db / 2)
+    return db, (2 * np.sin(db / 4) ** 2 * (1 + c + c * c) - a * (db + np.sin(db))) / c ** 3
+
+
+def body_tables():
+    C = body_db_poly(); a = np.linspace(0, 1, BT_NA); qh = lambda mu: body_Q(PI / 2, mu)
+    A = np.zeros((BT_NA, BT_NM, 2)); B = np.zeros((BT_NA, BT_NM))
+    for k, mu in enumerate(np.linspace(0, MU_S, BT_NM)):          # short way
+        eh = qh(mu) - 1; xh = 2 * eh / (2 * mu + np.sqrt(4 * mu * mu + 1.5 * eh)); xq = a * xh
+        x = body_inv(1 + 3 * xq ** 2 / 8 + 2 * mu * xq, mu, 0, PI / 2 + 1e-9)
+        A[:, k, 0] = np.where(a > 0, x / np.where(a > 0, xq, 1), 1)
+    for k, am in enumerate(np.linspace(0, MU_L, BT_NM)):          # long way
+        db, em = body_min(am, C); xh = db + np.sqrt(8 * (qh(-am) - 1 - em) / 3); xq = db + a * (xh - db)
+        x = body_inv(1 + em + 3 * (xq - db) ** 2 / 8, -am, db, PI / 2 + 1e-9)
+        c = np.cos(db / 2); s = np.sin(db / 2); n = 1 - am * (db + np.sin(db))
+        L2 = am * np.sin(db) / n - (am * (1 + np.cos(db)) / n) ** 2 + .75 / c ** 2   # (log Q)''
+        A[:, k, 1] = np.where(a > 0, (x - db) / np.where(a > 0, xq - db, 1), np.sqrt(.75 / ((1 + em) * L2)))
+    for k, mu in enumerate(np.linspace(-MU_L, MU_S, BT_NM)):      # far side, both ways
+        c0 = a * qh(mu) ** (-1 / 3)
+        x = body_inv(np.where(a > 0, 1 / np.maximum(c0, 1e-300) ** 3, np.inf), mu, PI / 2 - 1e-9, PI)
+        B[:, k] = np.where(a > 0, np.cos(x / 2) / np.maximum(c0, 1e-300), (1 + mu * PI) ** (1 / 3))
+    return A, B, C
+
+
 def lagrange4(p):
     return np.stack([-(p - 1) * (p - 2) * (p - 3) / 6, p * (p - 2) * (p - 3) / 2,
                      -p * (p - 1) * (p - 3) / 2, p * (p - 1) * (p - 2) / 6])
@@ -295,12 +369,23 @@ def estimate(A, B, n, lam, s):
     return np.where(s <= .5, vA, vB)
 
 
+def lit(x):
+    """Shortest literal for float32(x) (correctly rounded on input)."""
+    x = np.float32(x)
+    a = np.format_float_positional(x, unique=True, trim='.')
+    b = np.format_float_scientific(x, unique=True, trim='.', exp_digits=1)
+    r = min(a, b, key=len)
+    return r.replace('0.', '.', 1) if r.startswith(('0.', '-0.')) else r
+
+
 def arr(f, name, M):
     """Declare a protected array and initialize it with DATA statements of
     whole columns (at most 1000 values, under the standard's 255
-    continuation lines)."""
+    continuation lines). Values are stored in single precision (relative
+    rounding 6e-8, far below every starter's error) as the shortest decimal
+    that rounds back to the same float32."""
     shp = M.shape
-    f.write(f"   real(dp),protected::{name}({','.join(str(x) for x in shp)})\n")
+    f.write(f"   real(real32),protected::{name}({','.join(str(x) for x in shp)})\n")
     n1 = shp[0]; cols = [()] if len(shp) == 1 else list(np.ndindex(*shp[1:][::-1]))
     cols = [c[::-1] for c in cols]                      # Fortran column order
     per = max(1, 1000 // n1)
@@ -321,11 +406,11 @@ def arr(f, name, M):
             target = f"(({name}(ti_,tj_{',' + idx if idx else ''}),ti_=1,{n1}),tj_={lead[0] + 1},{lead[-1] + 1})"
         vals = np.concatenate([M[(slice(None),) + c] for c in grp]) if len(shp) > 1 else M
         f.write(f"   data {target}/ &\n")
-        f.write(", &\n".join("      " + ",".join(f"{x:.17e}_dp" for x in vals[k:k + 4]) for k in range(0, len(vals), 4)))
+        f.write(", &\n".join("      " + ",".join(lit(x) for x in vals[k:k + 8]) for k in range(0, len(vals), 8)))
         f.write("/\n")
 
 
-def write(out, n, A, B, PA, PB, LB, HS, HL, V, C, VS):
+def write(out, n, A, B, PA, PB, LB, HS, HL, V, C, VS, BA, BB, BC):
     def block(f, name, mats):
         arr(f, name, np.stack(mats, axis=-1))
     with open(out, 'w') as f:
@@ -353,9 +438,16 @@ def write(out, n, A, B, PA, PB, LB, HS, HL, V, C, VS):
         f.write(f"   ! Multiple revolutions (slices in mu = 1/m, last ~infinity): mr_q(tau,|sigma|,branch,k) = ((v-v*)/(|sigma|*(P-v*)) - 1)/(1-|sigma|),\n")
         f.write(f"   ! mr_c(tau,k) = cbrt(t_min/m)/sqrt(s_L), mr_s(tau,k) = v*; |tau| <= {TM}.\n")
         f.write(f"   integer,parameter::mr_nt={V.shape[0]},mr_ns={V.shape[1]},mr_nm={len(MR_M)},mr_nc={MR_NC}\n")
+        f.write(f"   ! mr_q grid: tau = {TM}*sin(mr_tc*x)/sin(mr_tc), x uniform in [-1,1]; |sigma| = (j/(mr_ns-1))**2.\n")
+        f.write(f"   real(dp),parameter::mr_tc={MR_TC}_dp,mr_tk={np.sin(MR_TC) / TM:.17e}_dp\n")
         f.write("   real(dp),parameter::mr_mu(mr_nm)=[" + ",".join(f"{1 / m:.17e}_dp" for m in MR_M) + "]\n")
         f.write("   integer,parameter::mr_m(mr_nm)=[" + ",".join(str(m) for m in MR_M) + "]\n")
         arr(f, "mr_q", V); arr(f, "mr_c", C); arr(f, "mr_s", VS)
+        f.write("   ! Body-limit inverses (mu = 1/M short way, -1/M long way; see tools/gen_tables.py):\n")
+        f.write("   ! bt_a(:,:,1) = x/xq, bt_a(:,:,2) = (x-x_b)/(xq-x_b) for x <= pi/2; bt_b = cos(x/2)/c0 beyond.\n")
+        f.write(f"   integer,parameter::bt_na={BT_NA},bt_nm={BT_NM}\n")
+        f.write("   real(dp),parameter::bt_db(5)=[" + ",".join(f"{x:.17e}_dp" for x in BC) + "]\n")
+        arr(f, "bt_a", BA); arr(f, "bt_b", BB)
 
 if __name__ == "__main__":
     n = int(sys.argv[1]) if len(sys.argv) > 1 else 32
@@ -365,4 +457,5 @@ if __name__ == "__main__":
     LB = long_body()
     HS, HL = hyperbolic(n)
     V, C, VS = multi_rev(MR_NT)
-    write(out, n, A, B, PA, PB, LB, HS, HL, V, C, VS)
+    BA, BB, BC = body_tables()
+    write(out, n, A, B, PA, PB, LB, HS, HL, V, C, VS, BA, BB, BC)

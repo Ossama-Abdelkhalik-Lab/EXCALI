@@ -7,7 +7,7 @@
 ! first locate the minimum time by two fixed ratios (mrev_edge).
 ! Geometry and time functions adapted from ConfluentContour's contour_simple.
 module excali_solver
-   use iso_fortran_env, only: real64, int64
+   use iso_fortran_env, only: real32, real64, int64
    use ieee_arithmetic, only: ieee_is_finite, ieee_value, ieee_quiet_nan, ieee_fma
    use iso_c_binding, only: c_double
    implicit none
@@ -134,8 +134,8 @@ contains
    ! 2. Starter, by the fold distance Delta = (t-t_min)/|t_min-A|: the fold
    !    series; on the crowded side the pole layer A*coth**3 (closed-form
    !    cubics); on the far side the body limit 4*theta*cos(x/2)**3 = n*pi +- (x+sin x),
-   !    theta = T/|b|**1.5, inverted by fixed Newton steps from closed-form
-   !    starts. Within 15% of R.
+   !    theta = T/|b|**1.5, inverted from the bt tables (body_x), and the fold
+   !    model's quartic by Ferrari (g_root). No step is iterated. Within 15% of R.
    ! 3. One 8-node rectangle at L = R/4, R = the distance to the nearest
    !    singularity (zeta: min(zeta, |zeta-zeta*|, pi/2, zeta_max-zeta); x:
    !    min(|x-x*|, pi-x)), in zeta when the starter has x < 1, in pi-x above 3pi/4.
@@ -147,7 +147,7 @@ contains
    integer,intent(out)    :: k,status
    real(dp),intent(out)   :: x,hs,hc
    real(dp) :: sd,yc,sy,s0,am,b15,t,ve,q,ze,lo,hi,zs,xs,tmin,t2z,t3z,pt,ut,sg,kk,dl,zx,th,d(0:3), &
-               err,z0,x0,e2,af,al,be,mm,cc,t2d,mc,dh,kap,db,lm,k2,rr,el, &
+               err,z0,x0,e2,af,al,be,mm,cc,t2d,mc,dh,kap,db,em,w,x1,rr,el, &
                fr(n1+2),fq(n1+2)
    logical :: crowd
    integer :: i,j,kz                               ! coordinate: 0 zeta, 1 x, 2 pi-x
@@ -216,7 +216,7 @@ contains
          ! The body limit's root vb, final within 8*v* of the far pole;
          ! otherwise its secant slope from v* sets the fold cubic
          ! x + 1/(2x**2) = 1.5 + (t-t_min)/(al*v*), x = v/v*.
-         x0=tbs_inv(t/b15,mm)
+         x0=body_x((t-am)/am,1/mm)
          if(pi-x0>=8*xs)then
             q=cos(xs/2);rr=mm+xs+sin(xs)
             if(x0>1.001_dp*xs)then
@@ -231,7 +231,6 @@ contains
    else
       cc=6*am*s0*s0;t2d=t2z*zx*zx;mc=min(6*cc/(xs**4*t2d),1._dp)
       dh=(t-tmin)/(t2d*xs*xs/2)
-      call body_min(mm,db,lm,k2)
       if(crowd)then
          if(t>am)z0=atanh(cbrt_c(am/t))
          if(z0>0.and.z0<2.5_dp)then
@@ -241,19 +240,25 @@ contains
          elseif(t>am)then
             z0=0;x0=cubic_pos(2*(t-am)/b15,2*cc/b15)
          else
-            ! Body anchored at the minimum time, linear to the plateau.
-            x0=body_inv((t-tmin)/b15+exp(lm),mm,-1._dp,db,lm,k2)
-            al=(am-b15*(mm-x0-sin(x0))/(4*cos(x0/2)**3))/x0
+            ! Body anchored at the minimum time, linear to the plateau: the
+            ! body root x1 by the quadratic through (0,am) and its minimum
+            ! (x_b,am*(1+em)), w = (am-t+tmin-tb)/(am-tb), tb = am*(1+em),
+            ! x1 = x_b*w/(1+sqrt(1-w)); slope (am-t+tmin-tb)/x1.
+            call body_min(1/mm,db,em)
+            w=min(max((t-tmin)/(am*em)+1,0._dp),1._dp)
+            al=-am*em*(1+sqrt(1-w))/db
             x0=cubic_pos((t-am)/al,cc/al)
          endif
       else
          if(mc>=.3_dp)x0=xs*g_root(mc,dh,.true.)
          if(.not.(x0>0.and.x0<1.5_dp*xs))then
-            ! Body plus the layer term cc/d**2, offset to t_min at d*: two fixed corrections.
+            ! Body plus the layer term cc/d**2, offset to t_min at d*: the body
+            ! roots without the layer (x1) and with its value at d* (x0)
+            ! bracket the root; one linear interpolation of the residual.
             kap=tmin-b15*(mm-xs-sin(xs))/(4*cos(xs/2)**3)-cc/xs**2
-            x0=body_inv((t-kap)/b15,mm,1._dp,db,lm,k2)
-            x0=body_inv((t-kap-cc/x0**2)/b15,mm,1._dp,db,lm,k2)
-            x0=body_inv((t-kap-cc/x0**2)/b15,mm,1._dp,db,lm,k2)
+            x1=body_x((t-kap-am)/am,-1/mm);x0=body_x((t-kap-am-cc/xs**2)/am,-1/mm)
+            rr=cc/x1**2;el=cc/x0**2-cc/xs**2
+            if(rr>el)x0=x0-(x1-x0)*el/(rr-el)
          endif
       endif
    endif
@@ -361,84 +366,73 @@ contains
       c=[h(0),h(1)*u(1),h(2)*u(1)**2+h(1)*u(2),h(3)*u(1)**3+3*h(2)*u(1)*u(2)+h(1)*u(3)]
    end function
 
-   ! Short-way body limit 4*th*cos(v/2)**3 = mm + v + sin(v) (mm = m*pi),
-   ! increasing in v: three fixed Newton steps in log form from the
-   ! large-m root (within 6e-6 of min(v, pi-v)).
-   pure real(dp) function tbs_inv(th,mm) result(x)
-      real(dp),intent(in)::th,mm
-      real(dp)::c,s,n
-      integer::j
-      x=2*acos(min(cbrt_c(mm/(4*th)),1._dp))
-      do j=1,3
-         c=cos(x/2);s=sin(x/2);n=mm+x+sin(x)
-         x=min(max(x-log(4*th*c**3/n)/(-1.5_dp*s/c-2*c*c/n),0._dp),pi*(1-epsilon(x)))
+   ! Body limit Q(x) = (1+mu*(x+sin x))/cos(x/2)**3 = 1+e, x = v (short way,
+   ! mu = 1/M) or pi-v (long way, mu = -1/M, side x > x_b of the minimum), from
+   ! the bt tables (gen_tables.py): x/xq or (x-x_b)/(xq-x_b) below pi/2,
+   ! cos(x/2)/c0, c0 = Q**(-1/3), above; within 3e-4 of min(x-x_b, pi-x).
+   pure real(dp) function body_x(e,mu) result(x)
+      real(dp),intent(in)::e,mu
+      real(dp),parameter::mu_s=1/pi,mu_l=1/(2*pi)
+      real(dp)::qh,a,db,em,q,qn,r,wt(4),ws(4),u
+      integer::i,j,h,k
+      qh=2*sqrt2*(1+mu*(pi/2+1))
+      if(1+e>qh)then
+         q=1/cbrt_c(1+e);a=(mu+mu_l)*((bt_nm-1)/(mu_s+mu_l));u=q*cbrt_c(qh)*(bt_na-1)
+         call stencil(a,u,i,j,ws,wt)
+         r=0
+         do k=1,4
+            r=r+ws(k)*(wt(1)*bt_b(i+1,j+k)+wt(2)*bt_b(i+2,j+k)+wt(3)*bt_b(i+3,j+k)+wt(4)*bt_b(i+4,j+k))
+         enddo
+         x=pi-2*asin(min(q*r,1._dp));return
+      endif
+      if(mu>=0)then
+         q=2*e/(2*mu+sqrt(4*mu*mu+1.5_dp*e));qn=2*(qh-1)/(2*mu+sqrt(4*mu*mu+1.5_dp*(qh-1)))
+         a=mu/mu_s;h=1;db=0
+      else
+         a=-mu;call body_min(a,db,em);a=a/mu_l;h=2
+         q=sqrt(max(e-em,0._dp)*(8._dp/3));qn=sqrt((qh-1-em)*(8._dp/3))
+      endif
+      call stencil(a*(bt_nm-1),q/qn*(bt_na-1),i,j,ws,wt)
+      r=0
+      do k=1,4
+         r=r+ws(k)*(wt(1)*bt_a(i+1,j+k,h)+wt(2)*bt_a(i+2,j+k,h)+wt(3)*bt_a(i+3,j+k,h)+wt(4)*bt_a(i+4,j+k,h))
       enddo
+      x=db+q*r
+   contains
+      pure subroutine stencil(a,u,i,j,ws,wt)
+         real(dp),intent(in)::a,u
+         integer,intent(out)::i,j
+         real(dp),intent(out)::ws(4),wt(4)
+         j=min(max(int(a)-1,0),bt_nm-4);call lagrange4(a-j,ws)
+         i=min(max(int(u)-1,0),bt_na-4);call lagrange4(u-i,wt)
+      end subroutine
    end function
 
-   ! Long-way body limit Tb(d) = (mm - d - sin d)/(4*cos(d/2)**3) (mm = (m+1)*pi):
-   ! its minimum db, where 3*sin(d/2)*(mm-d-sin d) = 4*cos(d/2)**3 (two fixed
-   ! Newton steps from 8/(3*mm), within 5e-8), lm = log Tb(db) and
-   ! k2 = sqrt(L''(db)/2), L = log Tb.
-   pure subroutine body_min(mm,db,lm,k2)
-      real(dp),intent(in)::mm
-      real(dp),intent(out)::db,lm,k2
-      real(dp)::c,s,n
-      integer::j
-      db=8/(3*mm)
-      do j=1,2
-         c=cos(db/2);s=sin(db/2);n=mm-db-sin(db);db=db-(3*s*n-4*c**3)/(1.5_dp*c*n)
-      enddo
-      c=cos(db/2);n=mm-db-sin(db)
-      lm=log(n/(4*c**3));k2=sqrt((.75_dp/c**2+sin(db)/n-4*c**4/n**2)/2)
+   ! Long-way body minimum for a = 1/M: x_b = (8a/3)(1 + a**2 poly(a**2)) (2e-8)
+   ! and em = Q(x_b) - 1 < 0, cancellation-free (stationary, so exact to 1e-16).
+   pure subroutine body_min(a,db,em)
+      real(dp),intent(in)::a
+      real(dp),intent(out)::db,em
+      real(dp)::c,a2
+      a2=a*a
+      db=8*a/3*(1+a2*((((bt_db(1)*a2+bt_db(2))*a2+bt_db(3))*a2+bt_db(4))*a2+bt_db(5)))
+      c=cos(db/2);em=(2*sin(db/4)**2*(1+c+c*c)-a*(db+sin(db)))/c**3
    end subroutine
 
-   ! Tb(d) = th on the side sd (+1: d > db, -1: d < db) of the minimum: two
-   ! fixed Newton steps on q = sd*sqrt(L(d)-lm), regular through the fold,
-   ! from its quadratic start db + q/k2 (within 1e-6 of the distance to db).
-   pure real(dp) function body_inv(th,mm,sd,db,lm,k2) result(x)
-      real(dp),intent(in)::th,mm,sd,db,lm,k2
-      real(dp)::tg,c,s,n,r,qp
-      integer::j
-      tg=sd*sqrt(max(log(th)-lm,0._dp))
-      x=db+tg/k2
-      if(sd>0)then
-         x=min(x,2*acos(min(cbrt_c((mm-pi)/(4*th)),1._dp)))
-      else
-         x=max(x,db*1e-3_dp)
-      endif
-      do j=1,2
-         c=cos(x/2);s=sin(x/2);n=mm-x-sin(x)
-         r=log(n/(4*c**3))-lm;qp=k2
-         if(r>1e-20_dp)qp=abs(1.5_dp*s/c-2*c*c/n)/(2*sqrt(r))
-         x=x-(sd*sqrt(max(r,0._dp))-tg)/qp
-         if(sd>0)then
-            x=min(max(x,db),pi*(1-epsilon(x)))
-         else
-            x=min(max(x,db*1e-6_dp),db)
-         endif
-      enddo
-   end function
-
-   ! Roots of the fold model g(x) = a0+a1*x+a2*x**2+c/x**2 = dh (g(1) = g'(1) = 0,
-   ! g''(1) = 2; c = mc/3, a2 = 1-mc), left (x < 1) or right: three fixed Newton
-   ! steps on +-sqrt(g), in w = 1/x on the left (g ~ c*w**2), from 1 +- sqrt(dh).
+   ! Roots of the fold model g(x) = (x-1)**2*(a2+2c/x+c/x**2) = dh (c = mc/3,
+   ! a2 = 1-mc): in w = 1/x the quartic c*w**4+(a2-3c-dh)*w**2+2(c-a2)*w+a2 = 0
+   ! is depressed, and Ferrari's resolvent puts both roots on w**2-s*w+k = 0:
+   ! left root 1/w+, right root w+/k.
    pure real(dp) function g_root(mc,dh,right) result(x)
       real(dp),intent(in)::mc,dh
       logical,intent(in)::right
-      real(dp)::c,a0,a1,a2,w,gg,gp
-      integer::j
-      c=mc/3;a2=1-mc;a1=2*c-2*a2;a0=-(a1+a2+c)
-      w=1+sqrt(dh)
-      do j=1,3
-         if(right)then
-            gg=a0+a1*w+a2*w*w+c/(w*w);gp=a1+2*a2*w-2*c/w**3
-         else
-            gg=a0+a1/w+a2/w**2+c*w*w;gp=-a1/w**2-2*a2/w**3+2*c*w
-         endif
-         gg=sqrt(max(gg,tiny(gg)))
-         w=max(w-(gg-sqrt(dh))/(gp/(2*gg)),1._dp)
-      enddo
-      x=w;if(.not.right)x=1/w
+      real(dp)::c,a2,p,q,r,bb,y,s,k,w
+      c=mc/3;a2=1-mc;p=(a2-3*c-dh)/c;q=2*(c-a2)/c;r=a2/c
+      bb=(p*p-4*r)/4
+      y=depressed_max(bb-p*p/3,2*p**3/27-p*bb/3-q*q/8)-p/3
+      s=sqrt(2*y);k=p/2+y+q/(2*s)
+      w=s/2+sqrt(max(s*s/4-k,0._dp))
+      x=merge(w/k,1/w,right)
    end function
 
    ! Positive root of d**3 + e*d**2 = f (f > 0), cancellation-free: with
@@ -1546,9 +1540,9 @@ contains
       sig=sqrt(1-r)
       if(sig<1e-2_dp)return
       stat=0;h=merge(2,1,br>0)
-      u=(tau+tab_tmax)*((mr_nt-1)/(2*tab_tmax))
+      u=(asin(tau*mr_tk)/mr_tc+1)*((mr_nt-1)/2._dp)   ! grid clustered toward |tau| = 0.9
       i=min(max(int(u)-1,0),mr_nt-4);call lagrange4(u-i,wt)
-      u=sig*(mr_ns-1)
+      u=sqrt(sig)*(mr_ns-1)                            ! grid uniform in sqrt|sigma|
       j=min(max(int(u)-1,0),mr_ns-4);call lagrange4(u-j,ws)
       do k=1,nk
          do jb=1,4
