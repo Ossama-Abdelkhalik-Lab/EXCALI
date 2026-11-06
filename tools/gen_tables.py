@@ -295,12 +295,23 @@ def estimate(A, B, n, lam, s):
     return np.where(s <= .5, vA, vB)
 
 
+def lit(x):
+    """Shortest literal for float32(x) (correctly rounded on input)."""
+    x = np.float32(x)
+    a = np.format_float_positional(x, unique=True, trim='.')
+    b = np.format_float_scientific(x, unique=True, trim='.', exp_digits=1)
+    r = min(a, b, key=len)
+    return r.replace('0.', '.', 1) if r.startswith(('0.', '-0.')) else r
+
+
 def arr(f, name, M):
     """Declare a protected array and initialize it with DATA statements of
     whole columns (at most 1000 values, under the standard's 255
-    continuation lines)."""
+    continuation lines). Values are stored in single precision (relative
+    rounding 6e-8, far below every starter's error) as the shortest decimal
+    that rounds back to the same float32."""
     shp = M.shape
-    f.write(f"   real(dp),protected::{name}({','.join(str(x) for x in shp)})\n")
+    f.write(f"   real(real32),protected::{name}({','.join(str(x) for x in shp)})\n")
     n1 = shp[0]; cols = [()] if len(shp) == 1 else list(np.ndindex(*shp[1:][::-1]))
     cols = [c[::-1] for c in cols]                      # Fortran column order
     per = max(1, 1000 // n1)
@@ -321,7 +332,7 @@ def arr(f, name, M):
             target = f"(({name}(ti_,tj_{',' + idx if idx else ''}),ti_=1,{n1}),tj_={lead[0] + 1},{lead[-1] + 1})"
         vals = np.concatenate([M[(slice(None),) + c] for c in grp]) if len(shp) > 1 else M
         f.write(f"   data {target}/ &\n")
-        f.write(", &\n".join("      " + ",".join(f"{x:.17e}_dp" for x in vals[k:k + 4]) for k in range(0, len(vals), 4)))
+        f.write(", &\n".join("      " + ",".join(lit(x) for x in vals[k:k + 8]) for k in range(0, len(vals), 8)))
         f.write("/\n")
 
 

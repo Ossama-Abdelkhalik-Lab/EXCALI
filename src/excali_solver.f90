@@ -7,7 +7,7 @@
 ! first locate the minimum time by two fixed ratios (mrev_edge).
 ! Geometry and time functions adapted from ConfluentContour's contour_simple.
 module excali_solver
-   use iso_fortran_env, only: real64, int64
+   use iso_fortran_env, only: real32, real64, int64
    use ieee_arithmetic, only: ieee_is_finite, ieee_value, ieee_quiet_nan, ieee_fma
    use iso_c_binding, only: c_double
    implicit none
