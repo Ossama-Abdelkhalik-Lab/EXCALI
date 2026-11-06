@@ -1540,9 +1540,9 @@ contains
       sig=sqrt(1-r)
       if(sig<1e-2_dp)return
       stat=0;h=merge(2,1,br>0)
-      u=(tau+tab_tmax)*((mr_nt-1)/(2*tab_tmax))
+      u=(asin(tau*mr_tk)/mr_tc+1)*((mr_nt-1)/2._dp)   ! grid clustered toward |tau| = 0.9
       i=min(max(int(u)-1,0),mr_nt-4);call lagrange4(u-i,wt)
-      u=sig*(mr_ns-1)
+      u=sqrt(sig)*(mr_ns-1)                            ! grid uniform in sqrt|sigma|
       j=min(max(int(u)-1,0),mr_ns-4);call lagrange4(u-j,ws)
       do k=1,nk
          do jb=1,4

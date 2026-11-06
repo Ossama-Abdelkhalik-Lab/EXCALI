@@ -39,10 +39,12 @@ interpolated in mu at run time, |tau| <= TM:
   g = (q - 1)/(1 - |sigma|), finite at the pole, so the pole distance
   (1 - |sigma| q)|P - v*| = (1-|sigma|)(1 - |sigma| g)|P - v*| with
   1 - |sigma| = r/(1+|sigma|), r = (t_min/t)**(1/3), keeps full precision as
-  t -> infinity (storing q itself leaves a 1e-9 offset at the pole). With 32 tau points and 16 |sigma|
-  points it is within 2.5% of |v - v*| (or the pole distance) for |sigma| >=
-  1e-3, so the rectangle needs no certificate (the old 16x16 table of v itself
-  was off by up to 8 times |v - v*| near the fold). mr_c decides
+  t -> infinity (storing q itself leaves a 1e-9 offset at the pole). Its grid
+  is 16 tau points clustered toward |tau| = TM (tau = TM*sin(1.45x)/sin(1.45),
+  x uniform) by 12 points uniform in sqrt|sigma|: within 1.4% of |v - v*| (or
+  the pole distance) for |sigma| >= 1e-2 in 4,000 random cases, where the
+  uniform 32 x 16 grid it replaced reached 2.8% (the old 16x16 table of v
+  itself was off by up to 8 times |v - v*| near the fold). mr_c decides
 feasibility outside a 1e-6 margin, so it needs MR_NC >= 128 and the m = 5
 slice (worst relative error 1.04e-7 for m = 1..40 and sampled m to 1000,
 including m between slices; 4.4e-7 at m = 5 when that slice is left out).
@@ -158,7 +160,8 @@ def hyperbolic(n):
     return out
 
 
-MR_M = [1, 2, 3, 4, 5, 6, 8, 12, 16, 32, 1000000]; MR_NT = 32; MR_NS = 16; MR_NC = 128
+MR_M = [1, 2, 3, 4, 5, 6, 8, 12, 16, 32, 1000000]; MR_NT = 16; MR_NS = 12; MR_NC = 128
+MR_TC = 1.45      # mr_q tau grid: tau = TM*sin(MR_TC*x)/sin(MR_TC), x uniform in [-1,1]
 
 
 def tmin_v(lam, m):
@@ -187,7 +190,8 @@ def branch_v(lam, sig, m):
 
 
 def multi_rev(n):
-    tg = np.linspace(-TM, TM, n); lg = 2 * tg / (1 + tg * tg); sg = np.linspace(0, 1, MR_NS)
+    tg = TM * np.sin(MR_TC * np.linspace(-1, 1, n)) / np.sin(MR_TC); lg = 2 * tg / (1 + tg * tg)
+    sg = np.linspace(0, 1, MR_NS) ** 2                 # uniform in sqrt|sigma|
     tc = np.linspace(-TM, TM, MR_NC); lc = 2 * tc / (1 + tc * tc)
     V = np.zeros((n, MR_NS, 2, len(MR_M))); C = np.zeros((MR_NC, len(MR_M))); VS = np.zeros_like(C)
     for k, m in enumerate(MR_M):
@@ -434,6 +438,8 @@ def write(out, n, A, B, PA, PB, LB, HS, HL, V, C, VS, BA, BB, BC):
         f.write(f"   ! Multiple revolutions (slices in mu = 1/m, last ~infinity): mr_q(tau,|sigma|,branch,k) = ((v-v*)/(|sigma|*(P-v*)) - 1)/(1-|sigma|),\n")
         f.write(f"   ! mr_c(tau,k) = cbrt(t_min/m)/sqrt(s_L), mr_s(tau,k) = v*; |tau| <= {TM}.\n")
         f.write(f"   integer,parameter::mr_nt={V.shape[0]},mr_ns={V.shape[1]},mr_nm={len(MR_M)},mr_nc={MR_NC}\n")
+        f.write(f"   ! mr_q grid: tau = {TM}*sin(mr_tc*x)/sin(mr_tc), x uniform in [-1,1]; |sigma| = (j/(mr_ns-1))**2.\n")
+        f.write(f"   real(dp),parameter::mr_tc={MR_TC}_dp,mr_tk={np.sin(MR_TC) / TM:.17e}_dp\n")
         f.write("   real(dp),parameter::mr_mu(mr_nm)=[" + ",".join(f"{1 / m:.17e}_dp" for m in MR_M) + "]\n")
         f.write("   integer,parameter::mr_m(mr_nm)=[" + ",".join(str(m) for m in MR_M) + "]\n")
         arr(f, "mr_q", V); arr(f, "mr_c", C); arr(f, "mr_s", VS)
