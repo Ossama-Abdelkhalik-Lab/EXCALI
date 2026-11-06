@@ -47,6 +47,22 @@ feasibility outside a 1e-6 margin, so it needs MR_NC >= 128 and the m = 5
 slice (worst relative error 1.04e-7 for m = 1..40 and sampled m to 1000,
 including m between slices; 4.4e-7 at m = 5 when that slice is left out).
 
+Body limits of multiple revolutions off the tables (|tau| > 0.9): with
+mu = 1/M (short way, M = m*pi) or -1/M (long way, M = (m+1)*pi), the large-|b|
+time is T = M*|b|**1.5*Q(x)/4, Q(x) = (1 + mu*(x + sin x))/cos(x/2)**3, x = v
+(short way) or pi - v (long way). Q increases to infinity at pi; on the long way
+it has a minimum at x_b ~ 8|mu|/3, where db/(8|mu|/3) - 1 = mu**2*poly(mu**2)
+(BODY_DB, degree 4, 2e-8 for m >= 1). Inverse tables of the far side, 8 mu
+points by 16, uniform:
+  x <= pi/2: bt_a(:,:,1) = x/xq (short way, mu in [0,1/pi]), xq the root of
+  3xq**2/8 + 2*mu*xq = Q - 1, on xq/xq(pi/2); bt_a(:,:,2) = (x - x_b)/(xq - x_b)
+  (long way, |mu| in [0,1/(2pi)]), xq = x_b + sqrt(8*(Q - Q_b)/3), on
+  (xq - x_b)/(xq(pi/2) - x_b);
+  x >= pi/2: bt_b = cos(x/2)/c0, c0 = Q**(-1/3), on c0/c0(pi/2), signed mu in
+  [-1/(2pi),1/pi].
+Every value tends to a finite limit at its ends, so the interpolated root
+keeps its relative accuracy at x_b and at pi (within 3e-4 of min(x - x_b, pi - x)).
+
 Truth: bisection on EXCALI's T for the canonical geometry r1 = r2 = 1, with
 the parabolic series where the closed form cancels.
 """
@@ -271,6 +287,60 @@ def ell_scales(lam):
     return np.cbrt(PI * ypi ** 1.5 / (S2 * tp)), tp / tv2
 
 
+BT_NM = 8; BT_NA = 16; MU_S = 1 / PI; MU_L = 1 / (2 * PI)
+
+
+def body_Q(x, mu):
+    return (1 + mu * (x + np.sin(x))) / np.cos(x / 2) ** 3
+
+
+def body_inv(Qv, mu, lo, hi):
+    """x on [lo, hi] (Q increasing there) with body_Q(x, mu) = Qv, by bisection."""
+    lo = np.broadcast_to(np.asarray(lo, float), np.shape(Qv)).copy()
+    hi = np.broadcast_to(np.asarray(hi, float), np.shape(Qv)).copy()
+    for _ in range(100):
+        m = .5 * (lo + hi); up = body_Q(m, mu) < Qv
+        lo = np.where(up, m, lo); hi = np.where(up, hi, m)
+    return .5 * (lo + hi)
+
+
+def body_db_poly():
+    """Coefficients (highest first) of (x_b/(8a/3) - 1)/a**2 in a**2, a = |mu|,
+    x_b the long-way minimum: a = 1/(x + sin x + 4 cos(x/2)**3/(3 sin(x/2)))."""
+    k = np.arange(40); a = MU_L * (1 - np.cos(PI * (k + .5) / 40)) / 2
+    lo = np.full_like(a, 1e-12); hi = np.full_like(a, 2.0)
+    for _ in range(200):
+        d = .5 * (lo + hi); up = 1 / (d + np.sin(d) + 4 * np.cos(d / 2) ** 3 / (3 * np.sin(d / 2))) < a
+        lo = np.where(up, d, lo); hi = np.where(up, hi, d)
+    return np.polyfit(a * a, (.5 * (lo + hi) / (8 * a / 3) - 1) / a ** 2, 4)
+
+
+def body_min(a, C):
+    """x_b and Q(x_b) - 1 (cancellation-free), as the solver computes them."""
+    db = 8 * a / 3 * (1 + a * a * np.polyval(C, a * a)); c = np.cos(db / 2)
+    return db, (2 * np.sin(db / 4) ** 2 * (1 + c + c * c) - a * (db + np.sin(db))) / c ** 3
+
+
+def body_tables():
+    C = body_db_poly(); a = np.linspace(0, 1, BT_NA); qh = lambda mu: body_Q(PI / 2, mu)
+    A = np.zeros((BT_NA, BT_NM, 2)); B = np.zeros((BT_NA, BT_NM))
+    for k, mu in enumerate(np.linspace(0, MU_S, BT_NM)):          # short way
+        eh = qh(mu) - 1; xh = 2 * eh / (2 * mu + np.sqrt(4 * mu * mu + 1.5 * eh)); xq = a * xh
+        x = body_inv(1 + 3 * xq ** 2 / 8 + 2 * mu * xq, mu, 0, PI / 2 + 1e-9)
+        A[:, k, 0] = np.where(a > 0, x / np.where(a > 0, xq, 1), 1)
+    for k, am in enumerate(np.linspace(0, MU_L, BT_NM)):          # long way
+        db, em = body_min(am, C); xh = db + np.sqrt(8 * (qh(-am) - 1 - em) / 3); xq = db + a * (xh - db)
+        x = body_inv(1 + em + 3 * (xq - db) ** 2 / 8, -am, db, PI / 2 + 1e-9)
+        c = np.cos(db / 2); s = np.sin(db / 2); n = 1 - am * (db + np.sin(db))
+        L2 = am * np.sin(db) / n - (am * (1 + np.cos(db)) / n) ** 2 + .75 / c ** 2   # (log Q)''
+        A[:, k, 1] = np.where(a > 0, (x - db) / np.where(a > 0, xq - db, 1), np.sqrt(.75 / ((1 + em) * L2)))
+    for k, mu in enumerate(np.linspace(-MU_L, MU_S, BT_NM)):      # far side, both ways
+        c0 = a * qh(mu) ** (-1 / 3)
+        x = body_inv(np.where(a > 0, 1 / np.maximum(c0, 1e-300) ** 3, np.inf), mu, PI / 2 - 1e-9, PI)
+        B[:, k] = np.where(a > 0, np.cos(x / 2) / np.maximum(c0, 1e-300), (1 + mu * PI) ** (1 / 3))
+    return A, B, C
+
+
 def lagrange4(p):
     return np.stack([-(p - 1) * (p - 2) * (p - 3) / 6, p * (p - 2) * (p - 3) / 2,
                      -p * (p - 1) * (p - 3) / 2, p * (p - 1) * (p - 2) / 6])
@@ -336,7 +406,7 @@ def arr(f, name, M):
         f.write("/\n")
 
 
-def write(out, n, A, B, PA, PB, LB, HS, HL, V, C, VS):
+def write(out, n, A, B, PA, PB, LB, HS, HL, V, C, VS, BA, BB, BC):
     def block(f, name, mats):
         arr(f, name, np.stack(mats, axis=-1))
     with open(out, 'w') as f:
@@ -367,6 +437,11 @@ def write(out, n, A, B, PA, PB, LB, HS, HL, V, C, VS):
         f.write("   real(dp),parameter::mr_mu(mr_nm)=[" + ",".join(f"{1 / m:.17e}_dp" for m in MR_M) + "]\n")
         f.write("   integer,parameter::mr_m(mr_nm)=[" + ",".join(str(m) for m in MR_M) + "]\n")
         arr(f, "mr_q", V); arr(f, "mr_c", C); arr(f, "mr_s", VS)
+        f.write("   ! Body-limit inverses (mu = 1/M short way, -1/M long way; see tools/gen_tables.py):\n")
+        f.write("   ! bt_a(:,:,1) = x/xq, bt_a(:,:,2) = (x-x_b)/(xq-x_b) for x <= pi/2; bt_b = cos(x/2)/c0 beyond.\n")
+        f.write(f"   integer,parameter::bt_na={BT_NA},bt_nm={BT_NM}\n")
+        f.write("   real(dp),parameter::bt_db(5)=[" + ",".join(f"{x:.17e}_dp" for x in BC) + "]\n")
+        arr(f, "bt_a", BA); arr(f, "bt_b", BB)
 
 if __name__ == "__main__":
     n = int(sys.argv[1]) if len(sys.argv) > 1 else 32
@@ -376,4 +451,5 @@ if __name__ == "__main__":
     LB = long_body()
     HS, HL = hyperbolic(n)
     V, C, VS = multi_rev(MR_NT)
-    write(out, n, A, B, PA, PB, LB, HS, HL, V, C, VS)
+    BA, BB, BC = body_tables()
+    write(out, n, A, B, PA, PB, LB, HS, HL, V, C, VS, BA, BB, BC)

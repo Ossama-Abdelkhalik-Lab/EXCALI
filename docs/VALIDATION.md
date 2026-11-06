@@ -581,9 +581,9 @@ Every final rectangle again computes its second moment. `de = |Q2/Q0 - (Q1/Q0)^2
   - Crowded side, short way: the layer cubic `2w^3 - D w^2 + 1 = 0` fitted at `zeta*`. Below `zeta = 2.5` it uses `alpha coth^3(zeta) + beta cosh(zeta)` fitted exactly at `zeta*`, with `cosh` taken at the layer-only root. The plain `atanh((A/t)^(1/3))` reached 0.24 of the bound at `abs(tau) = 0.91`; the fit cuts that to 0.04.
   - Crowded side, long way: `atanh`, the fold model, the plateau cubic or the anchored body.
   - Far side: the body limits simplify to `4 theta cos^3(x/2) = n pi + (x + sin x)` (short way) and `n pi - (x + sin x)` (long way).
-    - Short way: three fixed Newton steps in log form invert it (6e-6). Within `8 v*` of the far pole the inverse is final; otherwise its secant slope from `v*` sets the fold cubic. The cubic alone overshoots by about `v*/2` as the root nears the pole: 0.34 to 3.5 of the bound for `(pi - v)/v* < 2`, where the body inverse is within 1e-3.
-    - Long way: the body minimum takes two Newton steps (5e-8). Each branch takes two steps in `sqrt(log Tb - log Tb_min)`, which is regular through that minimum (1e-6).
-  - The four-term fold model takes three steps in `x` or `1/x` (1e-4).
+    - Short way: three fixed Newton steps in log form invert it (6e-6; replaced by a table on 2026-11-06, see below). Within `8 v*` of the far pole the inverse is final; otherwise its secant slope from `v*` sets the fold cubic. The cubic alone overshoots by about `v*/2` as the root nears the pole: 0.34 to 3.5 of the bound for `(pi - v)/v* < 2`, where the body inverse is within 1e-3.
+    - Long way: the body minimum takes two Newton steps (5e-8). Each branch takes two steps in `sqrt(log Tb - log Tb_min)`, which is regular through that minimum (1e-6). (Replaced 2026-11-06, see below.)
+  - The four-term fold model takes three steps in `x` or `1/x` (1e-4). (Replaced by Ferrari's formula 2026-11-06.)
   - All cubics are solved in closed form; `cubic_pos` also replaces `long_d`'s inline cubic.
 - **Rectangle.** 8 nodes at bound/4. It is in `zeta` when the starter has `x < 1`, otherwise in `x`, or in `pi - x` above `3 pi/4`. In `x` near `pi`, `pi - x` keeps only absolute precision: the far-branch velocities were up to 30 times less accurate than the old path's until this was added.
 
@@ -616,3 +616,24 @@ Validation:
   - Rerun with both directions: the earlier 120,000-case multi-revolution and huge-time sets used direction +1 only, so the table path's long way had not been stress-tested. Results: 0 failures, status 2 only within 2.5e-9 of `t_min`, worst arrival error 1.9e-9 (2.8e-9 for the reference version); all 18,000 huge-time cases solved.
 - **Speed.** `abs(tau) > 0.9` single solves take 2.22 µs, against 2.23 µs for the old path, which fails on 7% of them. A 32-node first ratio cost 2.93 µs: `libm` calls dominate each node, about 55 ns. Batch timing on the truth sets is unchanged: multirev 216.5 against 217.7 ns, zero_rev 182 to 183 ns.
 - **Size.** `src/excali_solver.f90` is 1,675 lines (1,658 before).
+
+## Single-precision tables; no iterated step in any starter (2026-11-06)
+
+- **Tables in single precision.** Starters need about 0.1%; float32 rounding is 6e-8. Each value is written as the shortest decimal that rounds back to the same float32. The table source went from 606 KB to 231 KB, and the compiled tables from 163 KB to 81 KB. `mr_c` keeps its 1e-6 feasibility margin (interpolation 1.0e-7 plus rounding 6e-8). Truth and stress sets are unchanged. The only differences are status-2 flips at `t/t_min - 1 = 1e-9` and `1e-10`, the flag's threshold: 3 more of 780 adversarial near-minimum cases, flipping in both directions.
+- **Body limits by table.** With `mu = 1/M` (short way) or `-1/M` (long way), the body limit is `Q(x) = (1 + mu (x + sin x))/cos^3(x/2) = 4 theta/M`. One family covers both ways.
+  - Long-way minimum: `x_b = (8a/3)(1 + a^2 poly(a^2))`, `a = 1/M`, degree 4, within 2e-8. `Q(x_b) - 1` is evaluated directly, without cancellation; at a stationary point the error in `x_b` enters only to second order. Deriving it from `Tb_min = 1/(3 sin(x_b/2))` instead is first-order in that error, and at `m = 20000` it swamped the plateau depth (`mu^2` = 2.5e-10).
+  - Inverse tables (8 `mu` points by 16), normalized so each value tends to a finite limit at both ends:
+    - `x/xq` (short way) and `(x - x_b)/(xq - x_b)` (long way) up to `pi/2`, with `xq` the quadratic root about the origin or the minimum;
+    - `cos(x/2) Q^(1/3)` beyond `pi/2`, shared by both ways in signed `mu`.
+
+    Within 1.3e-4 (short way) and 2.7e-4 (long way) of `min(x - x_b, pi - x)`; 384 values.
+  - Anchored body (long way, crowded side): the quadratic through `(0, A)` and the minimum, `x = x_b w/(1 + sqrt(1 - w))`. Within 1.3% of `x` (worst at `m = 1`). Its slope to the plateau is then explicit, so no inverse is needed.
+  - Kappa-body (long way, far side): the layer term `cc/d^2` is bracketed by two independent inverses, without the layer and with it at `d*`. One linear interpolation of the residual gives the root within 0.037 of the bound. The previous version took three sequential inverses (0.007); two sequential inverses give 0.051, one gives 0.42.
+- **Fold model by Ferrari.** `g(x) = (x-1)^2 (a2 + 2c/x + c/x^2)` exactly, so in `w = 1/x` the quartic `c w^4 + (a2 - 3c - dh) w^2 + 2(c - a2) w + a2 = 0` is already depressed. Ferrari's resolvent cubic (`depressed_max`) puts both roots on `w^2 - s w + k = 0`: the left root is `1/w+`, the right root `w+/k`. This matched bisection to 1e-10 (left) and 6e-6 (right) in 20,000 cases.
+- **Starter error per kind** (Python mirror, 3,000 cases, error relative to the bound): unchanged except the kappa-body (0.007 to 0.037). Body 0.049, g-model 0.002, short-way fold cubic 0.124, all as before.
+- **Results.**
+  - Truth sets identical to the single-precision-table version.
+  - zs2, hs, ps, ms (24k) and ms4d (120k): identical.
+  - `abs(tau) > 0.9` stress, 40,000 cases, and the extreme variant: 0 failures. 37 and 6 cases are 10 times worse than the old path, against 38 and 7 before.
+  - `mrev_edge` timing 2.35 to 2.16 us per solve, because the lookups are cheaper than the Newton steps.
+  - Solver 1,669 lines (1,675 before).
