@@ -683,10 +683,10 @@ contains
       !   parabola                       0      x = 0                        -
       !   |t-tp| <= 3.1% tp (near)       +-1    series reversion in X        X
       !     2nd-order term < 1e-8 of X          the series itself            -1
-      !   ellipse, |tau| < 0.75          1, 2   table_v (tab)                0
-      !   ellipse, -0.9 <= tau < -0.75   1, 2   table_v (tab)                1
-      !   ellipse, tau >= 0.75           1, 2   table_vp (tabp)              0
-      !     tau > 1-1e-6                        tabp clamped                 2
+      !   ellipse, -0.6 <= tau           1, 2   table_ve (tabe)              0
+      !     tau > 1-1e-6                        tabe clamped                 2
+      !   ellipse, -0.8 <= tau < -0.6    1, 2   table_ve (tabe)              1
+      !   ellipse, -0.9 <= tau < -0.8    1, 2   table_ve (tabe)              2
       !   ellipse, tau < -0.9            1, 2   long_d (closed form)         2
       !   hyperbola, t/tp >= 0.1         -1     table_w (tabh)               0
       !   hyperbola, t/tp < 0.1          -1,-2  large-w closed form          1
@@ -704,7 +704,7 @@ contains
          tp=sqrt(g%y0)*(g%y0*sqrt2/3+g%a)
          k=0;x=0;wb=0;acc=0;near=.false.
          if(abs(g%t-tp)<=4*epsilon(tp)*tp)return    ! parabola
-         near=abs(g%t-tp)<=.031_dp*tp      ! meets the table at phi=0.99
+         near=abs(g%t-tp)<=.031_dp*tp      ! the series window (tabh starts at u=0.99)
          k=1;u=rcbrt(tp/g%t)
          if(g%t<tp)then
             k=-1;u=g%t/tp
@@ -753,19 +753,7 @@ contains
             x=table_w(tau,u,wb)
             return
          endif
-         if(tau>=.75_dp)then
-            ! Short-way table tabp, split at Th=T(pi/2): s1=(Th/t)**(1/3) with
-            ! scale (K/Th)**(1/3) (side 1), or s2=(t-tp)/(Th-tp) with scale
-            ! s2*(s2+2*tp/(Th-tp)) (side 2).
-            sw=g%y0+g%b
-            sw=sqrt(sw)*(sw*(pi/(2*sqrt2))+g%a)          ! Th
-            if(g%t>=sw)then
-               u=rcbrt(sw/g%t);x=table_vp(tau,u,rcbrt(pi*g%ypi*sqrt(g%ypi)/(sqrt2*sw)),1)
-            else
-               u=(g%t-tp)/(sw-tp);x=table_vp(tau,u,u*(u+2*tp/(sw-tp)),2)
-            endif
-            if(tau>1-1e-6_dp)acc=2
-         elseif(tau<-.9_dp)then
+         if(tau<-.9_dp)then
             ! Long way toward tau -> -1: th=t/|b|**1.5, eta**2=2*yend/|b|; d=pi-v.
             x=long_d(g%t/((-g%b)*sqrt(-g%b)),sqrt(2*g%yend/(-g%b)));acc=2
             if(x>.25_dp*pi)then
@@ -774,17 +762,21 @@ contains
                k=2
             endif
             return
+         endif
+         ! Elliptic table tabe, split at Th=T(pi/2) (y(pi/2)=y0+b on both
+         ! ways): s1=(Th/t)**(1/3) with scale (K/Th)**(1/3), K=pi*y(pi)**1.5/sqrt2
+         ! (side 1), or s2=(t-tp)/(Th-tp) with scale s2*(s2+2*tp/(Th-tp)) (side 2).
+         sw=g%y0+g%b
+         sw=sqrt(sw)*(sw*(pi/(2*sqrt2))+g%a)             ! Th
+         if(g%t>=sw)then
+            u=rcbrt(sw/g%t);x=table_ve(tau,u,rcbrt(pi*g%ypi*sqrt(g%ypi)/(sqrt2*sw)),1)
          else
-            ! Elliptic table: scale (K/tp)**(1/3), K=pi*y(pi)**1.5/sqrt2, for
-            ! s<=1/2, else (t-tp)/T0', T0'=dT/d(v**2) at the parabola.
-            if(u<=.5_dp)then
-               dt=rcbrt(pi*g%ypi*sqrt(g%ypi)/(sqrt2*tp))
-            else
-               sw=sqrt(g%y0)
-               dt=(g%t-tp)/(sw*(g%y0*(rsqrt2/5)+g%b*(rsqrt2/2))+g%a*g%b/(4*sw))
-            endif
-            x=table_v(tau,u,dt)
-            if(abs(tau)>=.75_dp)acc=1
+            u=(g%t-tp)/(sw-tp);x=table_ve(tau,u,u*(u+2*tp/(sw-tp)),2)
+         endif
+         if(tau<-.8_dp.or.tau>1-1e-6_dp)then
+            acc=2
+         elseif(tau<-.6_dp)then
+            acc=1
          endif
          if(x>.75_dp*pi)then
             x=pi-x;k=2
@@ -1336,51 +1328,24 @@ contains
       endif
    end function
 
-   ! Zero-revolution elliptic root v from the tables at tau=lam/(1+sqrt(1-lam**2))
-   ! and phi=(tp/t)**(1/3), by local 4x4 cubic Lagrange interpolation:
-   ! A=(pi-v)/(phi*sc) for phi<=1/2, sc=(K/tp)**(1/3) from the pole asymptote
-   ! T ~ K/(pi-v)**3, and B=v**2/sc above, sc=(t-tp)/T0', T0'=dT/d(v**2) at
-   ! the parabola. Both tend to 1 at their ends. 0 outside the tables.
-   pure real(dp) function table_v(tau,phi,sc) result(v)
-      real(dp),intent(in)::tau,phi,sc
-      real(dp)::u,wt(4),ws(4),r(4)
-      integer::i,j,h
-      v=0
-      if(.not.(abs(tau)<=tab_tmax.and.phi>0.and.phi<=.99_dp))return
-      u=(tau+tab_tmax)*((tab_n-1)/(2*tab_tmax))
-      i=min(max(int(u)-1,0),tab_n-4);call lagrange4(u-i,wt)
-      h=1;u=phi*(2*(tab_n-1))
-      if(phi>.5_dp)then
-         h=2;u=u-(tab_n-1)
-      endif
-      j=min(max(int(u)-1,0),tab_n-4);call lagrange4(u-j,ws)
-      ! Four independent column sums, then one combination (short chains).
-      r=wt(1)*tab(i+1,j+1:j+4,h)+wt(2)*tab(i+2,j+1:j+4,h)+wt(3)*tab(i+3,j+1:j+4,h)+wt(4)*tab(i+4,j+1:j+4,h)
-      u=(ws(1)*r(1)+ws(2)*r(2))+(ws(3)*r(3)+ws(4)*r(4))
-      if(h==1)then
-         v=pi-phi*sc*u
-      else
-         v=sqrt(max(u*sc,0._dp))
-      endif
-      if(.not.(v>0.and.v<pi))v=0
-   end function
-
-   ! Short-way elliptic root v from tabp at tau in [0.75,1-1e-6] (grid uniform in
-   ! 1-sqrt(1-tau)) and s in [0,1]: side 1 (t>=T(pi/2)) v=pi-s*sc*A, side 2
-   ! v=sqrt(B*sc) (sc from zero_rev_start). 0 outside the table.
-   pure real(dp) function table_vp(tau,s,sc,side) result(v)
+   ! Zero-revolution elliptic root v from tabe at tau in [-0.9,1-1e-6] (grid
+   ! uniform in sign(tau)*(1-sqrt(1-|tau|)), clamped beyond 1-1e-6) and s in
+   ! [0,1], by local 4x4 cubic Lagrange interpolation: side 1 (t>=T(pi/2))
+   ! v=pi-s*sc*A, side 2 v=sqrt(B*sc) (sc from zero_rev_start). 0 outside.
+   pure real(dp) function table_ve(tau,s,sc,side) result(v)
       real(dp),intent(in)::tau,s,sc
       integer,intent(in)::side
       real(dp)::u,wt(4),ws(4),r(4)
       integer::i,j
       v=0
-      u=min(1-sqrt(1-tau),tabp_z1)              ! clamped beyond tau=1-1e-6
-      if(.not.(s>=0.and.s<=1))return
-      u=(u-tabp_z0)*((tab_n-1)/(tabp_z1-tabp_z0))
-      i=min(max(int(u)-1,0),tab_n-4);call lagrange4(u-i,wt)
-      u=s*(tab_n-1)
-      j=min(max(int(u)-1,0),tab_n-4);call lagrange4(u-j,ws)
-      r=wt(1)*tabp(i+1,j+1:j+4,side)+wt(2)*tabp(i+2,j+1:j+4,side)+wt(3)*tabp(i+3,j+1:j+4,side)+wt(4)*tabp(i+4,j+1:j+4,side)
+      u=min(sign(1-sqrt(1-abs(tau)),tau),tabe_z1)
+      if(.not.(u>=tabe_z0.and.s>=0.and.s<=1))return
+      u=(u-tabe_z0)*((tabe_nt-1)/(tabe_z1-tabe_z0))
+      i=min(max(int(u)-1,0),tabe_nt-4);call lagrange4(u-i,wt)
+      u=s*(tabe_ns-1)
+      j=min(max(int(u)-1,0),tabe_ns-4);call lagrange4(u-j,ws)
+      ! Four independent column sums, then one combination (short chains).
+      r=wt(1)*tabe(i+1,j+1:j+4,side)+wt(2)*tabe(i+2,j+1:j+4,side)+wt(3)*tabe(i+3,j+1:j+4,side)+wt(4)*tabe(i+4,j+1:j+4,side)
       u=(ws(1)*r(1)+ws(2)*r(2))+(ws(3)*r(3)+ws(4)*r(4))
       if(side==1)then
          v=pi-s*sc*u
