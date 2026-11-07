@@ -676,3 +676,23 @@ The zero-revolution elliptic starters `tab` (`abs(tau) <= 0.9`, split at `s = 1/
 - **Results.** Truth sets: infeasible and multirev identical; every other change is at rounding level (largest: zero_rev category 4 maximum 2.4e-13 to 4.3e-13; adversarial category 11 1.1e-14 to 2.7e-14). hs, ps, zs2, ms, ms6, ms7 identical. ms4d: 0 failures other than status 2; status-2 flags 19,542 to 19,765 (all within 2.5e-9 of `t_min`).
 - **Timing** (interleaved): random ellipses single 177 to 184 ns, batch 111 to 113; zero_rev + multirev batch, one thread, 156 to 158 ns.
 - **Size.** Solver 1,634 to 1,591 lines; table values 12,160 to 12,032 plus 12 coefficients.
+
+## Single-case path; where single-call speed went (2026-11-07)
+
+Every merged version was timed on the same cases (zero_rev.csv 100,000 and multirev.csv 10,000, shuffled, one thread, best of 7, two interleaved passes; machine under load, ns per case):
+
+| Version | Zero-rev single | Zero-rev batch | Multi-rev single | Multi-rev batch |
+|---|---|---|---|---|
+| 10-27 tables, batch entry (0c81d2c) | 183 | 167 | 197 | 158 |
+| 10-27 one code path (6affa43) | 216 | 163 | 213 | 168 |
+| 11-04 #6 region formulas | 266 | 214 | 222 | 178 |
+| 11-04 #7 single path for ellipses | 204 | 147 | 220 | 170 |
+| 11-06 #9, #10 | 206 | 151 | 223 | 172 |
+| 11-06 #11 compact tables | 205 | 153 | 229 | 182 |
+| 11-06 #12, 11-07 #13 | 207-216 | 154-162 | 230 | 181 |
+| this change | 190 | 157 | 221-229 | 182 |
+
+- **Single calls.** The largest single-call cost was "one code path" (`excali_one` as a block of one in `solve_chunk`, +33 ns): the block's arrays and stage loops only pay when several cases overlap. `excali_one` is a straight-line routine again. The stages live in `src/excali_stages.inc`, included in the `contains` part of both `solve_chunk` and `excali_one`, so the formulas exist once and each host inlines its own copy. Zero-revolution single solves 211 to 190 ns; batch unchanged.
+- **Agreement.** No status differs between `excali_one` and `excali_batch` on any dataset. Velocities agree to rounding (at most 8e-15 relative on zero_rev, dev, harness_mixed, sweep_zero); where the problem amplifies rounding they differ up to 1.6e-12 (multi-revolution near `t_min`) and 2.3e-10 (adversarial ill-conditioned cases). The cause is different multiply-add fusion in the two inlined copies; neither is more accurate.
+- **Multiple revolutions** crept up about 15% over #6, #9-#11 and #13 with no single cause; the `asin` in the `mr_q` index (#11) costs 1-2 ns.
+- **Results.** Every validation summary (truth sets, zs2, hs, ps, ms, ms4d, ms6, ms7) is identical to the previous build. CTest 3/3. Linux x86-64 (Docker): comparison EXCALI test 0 bad in all five classes; the multi-revolution stress sets have no `-4`.
