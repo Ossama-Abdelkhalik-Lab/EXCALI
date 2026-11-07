@@ -10,7 +10,7 @@ Ellipse (t > tp), root v (half the eccentric-anomaly change): one table tabe
 for tau in [TE0, TE1] on a grid uniform in z = sign(tau)*(1 - sqrt(1 - |tau|))
 (fine toward both ends), split at v = pi/2 (T_half = T(pi/2)); see ellipse().
 Below TE0 (transfers near 360 degrees) the solver uses the closed-form
-long-way starter with the tabb body.
+long-way starter with a polynomial body fit.
 
 Hyperbola (t < tp), root w (half the hyperbolic-anomaly change), u = t/tp in
 [UH, 1], on sqrt|tau| uniform in [0, sqrt(TOP)]: short way
@@ -230,27 +230,36 @@ def ellipse(nt=NE_T, ns=NE_S):
     return A, B
 
 
-NB = 64
+BB_DEG = 5                              # degree of each half of the body fit
 
 
 def P_body(d):
-    """T/|b|**1.5 near the long-way limit y_end -> 0, d = pi - v."""
-    return (PI - d + np.sin(d) * np.cos(d)) / (4 * np.cos(d / 2) ** 3) - np.sin(d / 2)
+    """T/|b|**1.5 near the long-way limit y_end -> 0, d = pi - v, without
+    cancellation: in v = pi - d, (v - sin v cos v)/(4 sin(v/2)**3) - cos(v/2),
+    with the series of v - sin(2v)/2 below v = 0.5."""
+    v = PI - d; s = np.sin(v / 2)
+    ser = np.zeros_like(v); term = np.ones_like(v)          # sum (-1)^(k+1) 4^k v^(2k+1)/(2(2k+1)!)
+    for k in range(1, 12):
+        term = term * (2 * v) ** 2 / ((2 * k) * (2 * k + 1)) if k > 1 else (2 * v) ** 3 / 6
+        ser = ser + (-1) ** (k + 1) * term / 2
+    num = np.where(v < .5, ser, v - np.sin(2 * v) / 2)
+    return num / (4 * s ** 3) - np.cos(v / 2)
 
 
-def long_body(nb=NB):
+def long_body(deg=BB_DEG):
     """Long-way limit tau -> -1: d = pi - v from P_body(d) = t/|b|**1.5 in
-    u = (t/|b|**1.5 - 1/3)/(pi/4 - 1/3): tabb(:,1) = v**2/u on u in [0,1/2],
-    tabb(:,2) = d/(1-u) on [1/2,1] (P_body is 1/3 at the parabola, pi/4 at the pole)."""
-    ul = np.clip(np.linspace(0, .5, nb), 1e-6, None); uh = np.clip(np.linspace(.5, 1, nb), None, 1 - 1e-6)
-    def inv(th):
-        lo = np.zeros_like(th); hi = np.full(th.shape, PI - 1e-12)
-        for _ in range(90):
-            m = .5 * (lo + hi); f = P_body(m) > th
-            lo = np.where(f, m, lo); hi = np.where(f, hi, m)
-        return .5 * (lo + hi)
-    vl = PI - inv(1 / 3 + ul * (PI / 4 - 1 / 3)); dh = inv(1 / 3 + uh * (PI / 4 - 1 / 3))
-    return np.stack([vl ** 2 / ul, dh / (1 - uh)], axis=-1)
+    u = (t/|b|**1.5 - 1/3)/(pi/4 - 1/3) (P_body is 1/3 at the parabola and
+    pi/4 at the pole). Least-squares polynomials of degree deg in the local
+    variable of each half: v**2/u = sum bb(k,1) (4u-1)**k on [0,1/2] and
+    d/(1-u) = sum bb(k,2) (4u-3)**k on [1/2,1]. Both quantities are smooth and
+    finite at their ends; degree 5 is within 2.4e-5 of min(v,d)."""
+    d = np.r_[np.linspace(1e-6, PI - 1e-6, 6000), PI - np.logspace(-6, -1, 400)]
+    u = (P_body(d) - 1 / 3) / (PI / 4 - 1 / 3); v = PI - d
+    lo = u <= .5
+    P = np.polynomial.Polynomial
+    c1 = P.fit(u[lo], v[lo] ** 2 / u[lo], deg, domain=[0, .5]).coef
+    c2 = P.fit(u[~lo], d[~lo] / (1 - u[~lo]), deg, domain=[.5, 1]).coef
+    return np.stack([c1, c2], axis=-1)
 
 
 def root_t(lam, t):
@@ -373,9 +382,9 @@ def write(out, n, EA, EB, LB, HS, HL, V, C, VS, BA, BB, BC):
         f.write(f"   real(dp),parameter::tabe_z0={zc(TE0):.17e}_dp,tabe_z1={zc(TE1):.17e}_dp\n")
         block(f, "tabe", (EA, EB))
         f.write("   ! Long-way limit tau -> -1, body d=pi-v from T/|b|**1.5=th, u=(th-1/3)/(pi/4-1/3):\n")
-        f.write("   ! tabb(:,1)=v**2/u on [0,1/2], tabb(:,2)=d/(1-u) on [1/2,1].\n")
-        f.write(f"   integer,parameter::tabb_n={LB.shape[0]}\n")
-        arr(f, "tabb", LB)
+        f.write("   ! v**2/u = sum bb(k,1)*(4u-1)**k on [0,1/2], d/(1-u) = sum bb(k,2)*(4u-3)**k on [1/2,1].\n")
+        f.write(f"   integer,parameter::bb_n={LB.shape[0]}\n")
+        f.write("   real(dp),protected::bb(bb_n,2)=reshape([" + ",".join(f"{x:.17e}_dp" for x in LB.T.ravel()) + "],[bb_n,2])\n")
         f.write(f"   ! Hyperbola, sqrt|tau| in [0,sqrt({TOP})], u = t/tp in [{UH},1]: tabh(:,:,1) = w**2/((1-u)*wn**2),\n")
         f.write("   ! wn**2 = L**2*(1-exp(-wb**2/L**2)), L = 1-log(u) (short way); tabh(:,:,2) = w**2/((1-u)*L**2) (long way).\n")
         f.write(f"   integer,parameter::tab_n={n}\n   real(dp),parameter::tab_tmax={TM}_dp\n")
