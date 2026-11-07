@@ -665,3 +665,14 @@ The zero-revolution elliptic starters `tab` (`abs(tau) <= 0.9`, split at `s = 1/
   - A fixed-node rectangle over all of `[0, pi]` in `X = v^2`, then a local rectangle, reaches rounding level for `abs(tau) <= 0.9` with no table, but fails toward `abs(tau) = 1`, where a singularity approaches the interval's end.
   - Izzo's starter and the bare pole and parabola asymptotes miss by about 100% of the bound near the ends, even with three rectangles.
   - No table reaches `tau < -0.9`: the long-way layer of width `eta^(2/3)` needs `long_d`.
+
+## One rectangle size; polynomial body fit (2026-11-07)
+
+- **One rectangle.** Every rectangle now has 8 nodes. Zero-revolution rectangles are all at half-width bound/4 (every starter is within 6.4% of the bound); multi-revolution rectangles stay at bound/8, because the other branch's root can be as close as twice the bound and `t_min`'s rounding noise is largest there. The 3-node rule, its compile-time trigonometry tables and the per-region accuracy classes are deleted; `zero_rev_start` only marks a near-parabolic series that is already the root.
+  - Cost of 3 to 8 nodes, measured alone: 6 ns (3% single, 5% batch) on random ellipses.
+  - A first version also widened multi-revolution rectangles to bound/4. It returned adversarial case 738 (category 10, m = 20, t/t_min - 1 = 1e-14) as status 0 with error 4.7e-9, where the previous build flags it status 2 (error 1.4e-9). Keeping bound/8 there restores the flag.
+- **Body fit.** `tabb` (64×2 values) became a degree-5 least-squares polynomial on each half of `u` (`bb`, 12 coefficients, in `4u-1` and `4u-3`): within 1.4e-5 of `min(v, d)` against a 40-digit reference. The generator's `P_body` is now cancellation-free near the parabola end (the old double-precision form lost all digits below `v = 1e-2`; the table's first point was clipped there). This follows the existing fitted polynomial `bt_db`.
+- **Dead code.** The cube root `(t_p/t)^(1/3)` in `zero_rev_start` fed only the deleted `tab`.
+- **Results.** Truth sets: infeasible and multirev identical; every other change is at rounding level (largest: zero_rev category 4 maximum 2.4e-13 to 4.3e-13; adversarial category 11 1.1e-14 to 2.7e-14). hs, ps, zs2, ms, ms6, ms7 identical. ms4d: 0 failures other than status 2; status-2 flags 19,542 to 19,765 (all within 2.5e-9 of `t_min`).
+- **Timing** (interleaved): random ellipses single 177 to 184 ns, batch 111 to 113; zero_rev + multirev batch, one thread, 156 to 158 ns.
+- **Size.** Solver 1,634 to 1,591 lines; table values 12,160 to 12,032 plus 12 coefficients.

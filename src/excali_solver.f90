@@ -33,22 +33,16 @@ module excali_solver
    integer,parameter  :: n1=8,h1=n1/2
    real(dp),parameter :: g8x(h1+1)=[.1834346424956498_dp,.5255324099163290_dp,.7966664774136267_dp,.9602898564975363_dp,1._dp]
    real(dp),parameter :: g8w(h1)=[.3626837833783620_dp,.3137066458778873_dp,.2223810344533745_dp,.1012285362903763_dp]
-   real(dp),parameter :: g3x(3)=[0._dp,.7745966692414834_dp,1._dp],g3w(2)=[8._dp/9,5._dp/9]
    ! Full node lists (nodes, then the endpoints +1,-1) with their weights,
    ! and cos/sin (cosh/sinh) of the half offsets L*u/2 for each L=2**(-k).
    ! They are protected module data, initialized at compile time: indexing a
    ! parameter array at run time makes some gfortran versions copy it to the
    ! stack.
    real(dp),parameter :: u8(n1+2)=[g8x(1:h1),-g8x(1:h1),1._dp,-1._dp],w8(n1+2)=[g8w,g8w,0._dp,0._dp]
-   real(dp),parameter :: u3(5)=[0._dp,g3x(2),-g3x(2),1._dp,-1._dp],w3(5)=[g3w(1),g3w(2),g3w(2),0._dp,0._dp]
    real(dp),protected :: c8f(n1+2,0:kmax)=reshape([((cos(.5_dp**(k_+1)*u8(j_)),j_=1,n1+2),k_=0,kmax)],[n1+2,kmax+1])
    real(dp),protected :: s8f(n1+2,0:kmax)=reshape([((sin(.5_dp**(k_+1)*u8(j_)),j_=1,n1+2),k_=0,kmax)],[n1+2,kmax+1])
    real(dp),protected :: ch8f(n1+2,0:kmax)=reshape([((cosh(.5_dp**(k_+1)*u8(j_)),j_=1,n1+2),k_=0,kmax)],[n1+2,kmax+1])
    real(dp),protected :: sh8f(n1+2,0:kmax)=reshape([((sinh(.5_dp**(k_+1)*u8(j_)),j_=1,n1+2),k_=0,kmax)],[n1+2,kmax+1])
-   real(dp),protected :: c3f(5,0:kmax)=reshape([((cos(.5_dp**(k_+1)*u3(j_)),j_=1,5),k_=0,kmax)],[5,kmax+1])
-   real(dp),protected :: s3f(5,0:kmax)=reshape([((sin(.5_dp**(k_+1)*u3(j_)),j_=1,5),k_=0,kmax)],[5,kmax+1])
-   real(dp),protected :: ch3f(5,0:kmax)=reshape([((cosh(.5_dp**(k_+1)*u3(j_)),j_=1,5),k_=0,kmax)],[5,kmax+1])
-   real(dp),protected :: sh3f(5,0:kmax)=reshape([((sinh(.5_dp**(k_+1)*u3(j_)),j_=1,5),k_=0,kmax)],[5,kmax+1])
    ! Reciprocal factorials 1/j!, so the Taylor series multiply by constants.
    real(dp),parameter :: rf(16)=[(1/gamma(j_+1._dp),j_=1,16)]
    ! (1-cos(v))/X in X=v**2 (highest first), for the near-parabolic coordinate.
@@ -488,8 +482,8 @@ contains
    real(dp),optional,intent(in) :: pnormal(3)
    type(frame) :: gc(nb)
    real(dp) :: xc(nb),cc(nb),hsc(nb),hcc(nb),wbc(nb),lbc(nb),ubc(nb),ddc(nb),dec(nb),rbc(nb),elc,vsc,chord,semi
-   integer :: kc(nb),kd(nb),krc(nb),accc(nb),j
-   logical :: fast(nb),nearc(nb),eightc(nb)
+   integer :: kc(nb),kd(nb),krc(nb),j
+   logical :: fast(nb),nearc(nb),finc(nb)
    ! Stage 1: geometry; the multi-revolution tables.
    do j=1,nc
       fast(j)=.false.;nearc(j)=.false.;halfc(j)=0;statc(j)=-1;rbc(j)=0;krc(j)=0
@@ -497,7 +491,7 @@ contains
          .or..not.ieee_is_finite(tofc(j)))cycle
       call geometry(r1c(:,j),r2c(:,j),tofc(j),dirc(j),gc(j),statc(j),halfc(j),pnormal)
       if(statc(j)/=-4)cycle
-      lbc(j)=0;ubc(j)=pi;accc(j)=0
+      lbc(j)=0;ubc(j)=pi;finc(j)=.false.
       if(nrev(j)>0)then
          ! Every ellipse through both points has a>=s/2, so T > m*2*pi*(s/2)**1.5
          ! (within 31% of the minimum time) rejects most infeasible times.
@@ -533,18 +527,18 @@ contains
    ! rectangle's coordinate, centre and half-width.
    do j=1,nc
       if(statc(j)/=-4.or.nrev(j)>0)cycle
-      call zero_rev_start(gc(j),kc(j),xc(j),wbc(j),accc(j),nearc(j))
+      call zero_rev_start(gc(j),kc(j),xc(j),wbc(j),finc(j),nearc(j))
       fast(j)=xc(j)>0.or.kc(j)==0
    enddo
    do j=1,nc
       if(.not.fast(j).or.kc(j)==0)cycle
-      call fast_coordinate(kc(j),xc(j),nrev(j),gc(j)%b,wbc(j),lbc(j),ubc(j),accc(j),kd(j),cc(j),elc,rbc(j),eightc(j),hsc(j),hcc(j))
+      call fast_coordinate(kc(j),xc(j),nrev(j),gc(j)%b,wbc(j),lbc(j),ubc(j),kd(j),cc(j),elc,rbc(j),hsc(j),hcc(j))
       fast(j)=elc>0;krc(j)=kexp(elc)
    enddo
    ! Stage 3: one rectangle each, then its acceptance.
    do j=1,nc
       ddc(j)=0;dec(j)=0
-      if(fast(j).and.kc(j)/=0.and.accc(j)>=0)call rect_ratio(kd(j),cc(j),hsc(j),hcc(j),krc(j),eightc(j),gc(j)%y0,merge(wbc(j),gc(j)%yend,kd(j)==-2),gc(j)%a,gc(j)%b, &
+      if(fast(j).and.kc(j)/=0.and..not.finc(j))call rect_ratio(kd(j),cc(j),hsc(j),hcc(j),krc(j),gc(j)%y0,merge(wbc(j),gc(j)%yend,kd(j)==-2),gc(j)%a,gc(j)%b, &
          gc(j)%t,nrev(j),ddc(j),dec(j))
    enddo
    do j=1,nc
@@ -674,38 +668,34 @@ contains
          stat=1
       end subroutine
 
-      ! Zero-revolution region selector: the coordinate k, the starter x in it
-      ! and the starter's accuracy class acc, which fixes the rectangle before
-      ! it is evaluated (fast_coordinate). wb is the short-way branch point;
-      ! near marks the near-parabolic window (velocities use Lagrange f,g).
+      ! Zero-revolution region selector: the coordinate k and the starter x in
+      ! it. wb is the short-way branch point; near marks the near-parabolic
+      ! window (velocities use Lagrange f,g); fin marks a series that is
+      ! already the root. Every starter is within 6.4% of the singularity
+      ! bound R, so every rectangle is the same (fast_coordinate).
       !
-      !   region                         k      starter                     acc
-      !   parabola                       0      x = 0                        -
-      !   |t-tp| <= 3.1% tp (near)       +-1    series reversion in X        X
-      !     2nd-order term < 1e-8 of X          the series itself            -1
-      !   ellipse, -0.6 <= tau           1, 2   table_ve (tabe)              0
-      !     tau > 1-1e-6                        tabe clamped                 2
-      !   ellipse, -0.8 <= tau < -0.6    1, 2   table_ve (tabe)              1
-      !   ellipse, -0.9 <= tau < -0.8    1, 2   table_ve (tabe)              2
-      !   ellipse, tau < -0.9            1, 2   long_d (closed form)         2
-      !   hyperbola, t/tp >= 0.1         -1     table_w (tabh)               0
-      !   hyperbola, t/tp < 0.1          -1,-2  large-w closed form          1
+      !   region                         k      starter
+      !   parabola                       0      x = 0
+      !   |t-tp| <= 3.1% tp (near)       +-1    series reversion in X
+      !     2nd-order term < 1e-8 of X          the series itself (fin)
+      !   ellipse, tau >= -0.9           1, 2   table_ve (tabe)
+      !   ellipse, tau < -0.9            1, 2   long_d (closed form)
+      !   hyperbola, t/tp >= 0.1         -1     table_w (tabh)
+      !   hyperbola, t/tp < 0.1          -1,-2  large-w closed form
       !
-      ! acc 0: within 0.2% of the singularity bound R, 3 nodes at R/256;
-      ! acc 1: within 4% (1.1% for hyperbolas), 8 nodes at R/8; acc 2: within
-      ! 6.4%, 8 nodes at R/4; X: 8 nodes at |X|/8 (or less). k=2 is pi-v
-      ! (used when v > 3pi/4, or d < pi/4 from long_d); k=-2 is xi=wb-w.
-      pure subroutine zero_rev_start(g,k,x,wb,acc,near)
+      ! k=2 is pi-v (used when v > 3pi/4, or d < pi/4 from long_d); k=-2 is
+      ! xi=wb-w.
+      pure subroutine zero_rev_start(g,k,x,wb,fin,near)
          type(frame),intent(in)::g
-         integer,intent(out)::k,acc
+         integer,intent(out)::k
          real(dp),intent(out)::x,wb
-         logical,intent(out)::near
+         logical,intent(out)::fin,near
          real(dp)::tp,u,tau,dc,sl,sw,r0,r1,dt
          tp=sqrt(g%y0)*(g%y0*sqrt2/3+g%a)
-         k=0;x=0;wb=0;acc=0;near=.false.
+         k=0;x=0;wb=0;fin=.false.;near=.false.
          if(abs(g%t-tp)<=4*epsilon(tp)*tp)return    ! parabola
          near=abs(g%t-tp)<=.031_dp*tp      ! the series window (tabh starts at u=0.99)
-         k=1;u=rcbrt(tp/g%t)
+         k=1
          if(g%t<tp)then
             k=-1;u=g%t/tp
             if(g%b>0)then
@@ -717,10 +707,10 @@ contains
             ! When the second-order term is below 1e-8 of X the series is exact
             ! to rounding (the dropped term is its square), while T-t at a
             ! rectangle's nodes is then only a few hundred ulps and can round
-            ! to 0: the series is the root (acc -1).
+            ! to 0: the series is the root.
             call near_parabola_x(g%y0,g%a,g%b,g%t,tp,u,dt)
             if(u*k>0)x=sqrt(abs(u))
-            acc=merge(-1,1,abs(dt)<1e-8_dp)
+            fin=abs(dt)<1e-8_dp
             return
          endif
          if(k<0.and.u<tabh_u0)then
@@ -735,7 +725,7 @@ contains
             else
                dc=(dc-sw*sw*g%b)/(2*g%t*g%t)
             endif
-            x=log(dc);acc=1
+            x=log(dc)
             if(g%b>0)then
                sl=(g%t*dc/(sqrt2*sw))**2                  ! y
                if(sl<g%y0/2)then
@@ -755,7 +745,7 @@ contains
          endif
          if(tau<-.9_dp)then
             ! Long way toward tau -> -1: th=t/|b|**1.5, eta**2=2*yend/|b|; d=pi-v.
-            x=long_d(g%t/((-g%b)*sqrt(-g%b)),sqrt(2*g%yend/(-g%b)));acc=2
+            x=long_d(g%t/((-g%b)*sqrt(-g%b)),sqrt(2*g%yend/(-g%b)))
             if(x>.25_dp*pi)then
                x=pi-x
             else
@@ -773,11 +763,6 @@ contains
          else
             u=(g%t-tp)/(sw-tp);x=table_ve(tau,u,u*(u+2*tp/(sw-tp)),2)
          endif
-         if(tau<-.8_dp.or.tau>1-1e-6_dp)then
-            acc=2
-         elseif(tau<-.6_dp)then
-            acc=1
-         endif
          if(x>.75_dp*pi)then
             x=pi-x;k=2
          endif
@@ -787,18 +772,17 @@ contains
       ! rectangle. Every singularity of 1/(T-t) lies at least R from the root:
       ! min(v,pi-v) for ellipses (sqrt(y) branch points, mirror root, pole),
       ! min(w,pi) or min(2w,wb-w,pi) for hyperbolas in w, min(xi,2w,pi) in
-      ! xi=wb-w, |X| near the parabola, the bracket [lo,hi] for m>0. el is
-      ! R/256 (3 nodes), R/8 or R/4 (8 nodes) by the zero-revolution accuracy
-      ! class acc; X 8 nodes at |X|/8 (or less); multiple revolutions 8 nodes
-      ! at R/16. kexp rounds el down to a power of two (el<=1 keeps the node
-      ! tables in range).
-      pure subroutine fast_coordinate(k,x,m,b,wb,lo,hi,acc,kind1,c,el,rb,eight,hs,hc)
-         integer,intent(in)::k,m,acc
+      ! xi=wb-w, |X| near the parabola, the bracket [lo,hi] for m>0. Every
+      ! rectangle has 8 nodes at L=R/4 (R/8 for m>0, where the other branch's
+      ! root can be as close as 2R and t_min's rounding noise is largest),
+      ! rounded down to a power of two by kexp (el<=1 keeps the node tables in
+      ! range): error about (L/2R)**16 <= 8**-16.
+      pure subroutine fast_coordinate(k,x,m,b,wb,lo,hi,kind1,c,el,rb,hs,hc)
+         integer,intent(in)::k,m
          real(dp),intent(in)::x,b,wb,lo,hi
          integer,intent(out)::kind1
          real(dp),intent(out)::c,el,rb,hs,hc
-         logical,intent(out)::eight
-         hs=0;hc=1;kind1=k;c=x;eight=.true.
+         hs=0;hc=1;kind1=k;c=x
          if(m>0)then
             el=min(c-lo,hi-c);rb=el;el=el/8
             call sincos_half(c,hs,hc)
@@ -808,8 +792,6 @@ contains
             el=min(abs(c),.2_dp-abs(c))
             if(k>0)el=min(2*abs(c),.2_dp-abs(c))
             if(k<0.and.b>0)el=min(el,wb*wb-abs(c))
-            rb=el;el=el/16
-            return
          elseif(k>0)then
             el=min(c,pi-c)                   ! k=2: x is already pi-v
             call sincos_half(c,hs,hc)
@@ -823,15 +805,7 @@ contains
             if(b>0)el=min(2*c,wb-c,pi)
             call shch(c/2,hs,hc)
          endif
-         rb=el
-         select case(acc)
-          case(0)
-            el=el/256;eight=.false.
-          case(1)
-            el=el/8
-          case default
-            el=el/4
-         end select
+         rb=el;el=el/4
       end subroutine
 
       ! The rectangle's root is final: move the root and its half-angle
@@ -931,7 +905,7 @@ contains
    end subroutine solve_chunk
 
    ! Zero-height thin rectangle on [c-L,c+L], L=2**(-kr): Gauss-Legendre
-   ! 8 or 3 nodes (eight) plus the two endpoints. dd=Q1/Q0 locates the
+   ! 8 nodes plus the two endpoints. dd=Q1/Q0 locates the
    ! enclosed root; de=|Q2/Q0-dd**2|/L vanishes for a single pole and
    ! estimates the error; sc reports a sign change of T-t.
    ! Nodes (kind 0: X=k*x**2 series; 1: v; 2: pi-v; -1: w; -2: xi=wb-w) are
@@ -956,39 +930,23 @@ contains
       err=abs(q2/q0-d*d)/(hi-lo)
    end subroutine
 
-   pure subroutine rect_ratio(kind1,c,hs,hc,kr,eight,y0,yend,a,b,t,m,dd,de)
+   pure subroutine rect_ratio(kind1,c,hs,hc,kr,y0,yend,a,b,t,m,dd,de)
       integer,intent(in)::kind1,kr,m
       real(dp),intent(in)::c,hs,hc,y0,yend,a,b,t
-      logical,intent(in)::eight
       real(dp),intent(out)::dd,de
       real(dp),dimension(n1+2)::uu,wq,ct,st,f,f1
       real(dp)::el,q0,q1,q2,r0,r1,r2,fa,fb,x,sh,ch,sn,cn,rs,yv,y1,ff,ff1,q,g,g1,ser,ser1,pk,y00,ab,mt,sb,cb
       integer::np,j,n
       logical::lw,us
-      el=pow2m(kr)
+      el=pow2m(kr);np=n1+2;uu=u8;wq=w8
       if(kr>kmax)then
          ! Below 2**-62 (xi ~ t**2 at the shortest times): cos=cosh=1 and
          ! sin=sinh=L*u/2 to rounding.
-         if(eight)then
-            np=n1+2;uu=u8;wq=w8
-         else
-            np=5;uu(1:5)=u3;wq(1:5)=w3
-         endif
          ct=1;st=el*uu/2
-      elseif(eight)then
-         np=n1+2;uu=u8;wq=w8
-         if(kind1<0)then
-            ct=ch8f(:,kr);st=sh8f(:,kr)
-         elseif(kind1>0)then
-            ct=c8f(:,kr);st=s8f(:,kr)
-         endif
-      else
-         np=5;uu(1:5)=u3;wq(1:5)=w3
-         if(kind1<0)then
-            ct(1:5)=ch3f(:,kr);st(1:5)=sh3f(:,kr)
-         elseif(kind1>0)then
-            ct(1:5)=c3f(:,kr);st(1:5)=s3f(:,kr)
-         endif
+      elseif(kind1<0)then
+         ct=ch8f(:,kr);st=sh8f(:,kr)
+      elseif(kind1>0)then
+         ct=c8f(:,kr);st=s8f(:,kr)
       endif
       select case(kind1)
       case(0)
@@ -1079,12 +1037,6 @@ contains
          r1=r1+wq(j+1)*(x*f1(j+1)+f(j+1))
          r2=r2+wq(j+1)*x*(x*f1(j+1)+2*f(j+1))
       enddo
-      if(mod(np,2)==1)then
-         j=np-2;x=el*uu(j)
-         q0=q0+wq(j)*f1(j)
-         q1=q1+wq(j)*(x*f1(j)+f(j))
-         q2=q2+wq(j)*x*(x*f1(j)+2*f(j))
-      endif
       q0=fb-fa-el*(q0+r0)
       q1=el*(fb+fa)-el*(q1+r1)
       q2=el*el*(fb-fa)-el*(q2+r2)
@@ -1359,10 +1311,11 @@ contains
    ! eta**2=2*yend/|b|, within 6.4% of min(v,d). With dl=th-pi/4 (the plateau
    ! pi/4): the pole layer (pi/4)((1+eta**2/d**2)**1.5-1)=dl when that gives
    ! d<2*eta; else the transition d**3/2+dl*d**2=3*pi*eta**2/8 (linear body,
-   ! linearized layer) when that gives d<0.1; else the body limit from tabb.
+   ! linearized layer) when that gives d<0.1; else the body limit, a
+   ! polynomial fit on each half of u (bb, within 2.4e-5).
    pure real(dp) function long_d(th,eta) result(d)
       real(dp),intent(in)::th,eta
-      real(dp)::dl,x,u,wt(4),h
+      real(dp)::dl,x,u,h,z
       integer::j
       dl=th-pi/4
       if(dl>0)then
@@ -1378,13 +1331,17 @@ contains
       d=cubic_pos(2*dl,.75_dp*pi*eta*eta)
       if(d<.1_dp)return
       u=min(max((th-1._dp/3)/(pi/4-1._dp/3),0._dp),1._dp)
-      h=merge(u/.5_dp,(u-.5_dp)/.5_dp,u<=.5_dp)*(tabb_n-1)
-      j=min(max(int(h)-1,0),tabb_n-4);call lagrange4(h-j,wt)
       if(u<=.5_dp)then
-         h=wt(1)*tabb(j+1,1)+wt(2)*tabb(j+2,1)+wt(3)*tabb(j+3,1)+wt(4)*tabb(j+4,1)
+         z=4*u-1;h=bb(bb_n,1)
+         do j=bb_n-1,1,-1
+            h=h*z+bb(j,1)
+         enddo
          d=pi-sqrt(max(h*u,0._dp))
       else
-         h=wt(1)*tabb(j+1,2)+wt(2)*tabb(j+2,2)+wt(3)*tabb(j+3,2)+wt(4)*tabb(j+4,2)
+         z=4*u-3;h=bb(bb_n,2)
+         do j=bb_n-1,1,-1
+            h=h*z+bb(j,2)
+         enddo
          d=h*(1-u)
       endif
    end function
