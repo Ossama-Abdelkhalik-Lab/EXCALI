@@ -520,16 +520,31 @@ contains
    integer,intent(in)   :: direction(n),nrev(n),branch(n)
    real(dp),intent(out) :: v1(3,n),v2(3,n)
    integer,intent(out)  :: status(n),half(n)
-   integer :: i0,nc
+   integer :: i0
    ! Chunks are independent; under OpenMP they run in parallel (dynamic
-   ! schedule), and small batches stay serial.
-   !$omp parallel do schedule(dynamic) private(nc) if(n>8*nb)
-   do i0=1,n,nb
+   ! schedule). Small batches stay serial outside any OpenMP region: entering
+   ! one costs about 200-300 ns per call even when an if clause keeps it on
+   ! one thread.
+   if(n<=8*nb)then
+      do i0=1,n,nb
+         call one_chunk(i0)
+      enddo
+   else
+      !$omp parallel do schedule(dynamic)
+      do i0=1,n,nb
+         call one_chunk(i0)
+      enddo
+      !$omp end parallel do
+   endif
+
+   contains
+   subroutine one_chunk(i0)
+      integer,intent(in)::i0
+      integer::nc
       nc=min(nb,n-i0+1)
       call solve_chunk(nc,r1(:,i0:i0+nc-1),r2(:,i0:i0+nc-1),tof(i0:i0+nc-1),direction(i0:i0+nc-1), &
          v1(:,i0:i0+nc-1),v2(:,i0:i0+nc-1),status(i0:i0+nc-1),half(i0:i0+nc-1),nrev(i0:i0+nc-1),branch(i0:i0+nc-1))
-   enddo
-   !$omp end parallel do
+   end subroutine
    end subroutine excali_batch
 
    ! nc <= nb normalized solves, stage by stage so independent cases overlap:
