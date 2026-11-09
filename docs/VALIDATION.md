@@ -711,3 +711,46 @@ Every merged version was timed on the same cases (zero_rev.csv 100,000 and multi
 The two evaluations differ by at most 4.3 ulp on the hyperbolic cases (p99.9 2.0) and 21 ulp on the parabolic ones (radius ratio near 150, where `1 - y/|r2|` cancels; double-double is closer to the reference in about half the changed cases, since `y` carries its own rounding). The truth suites show no new failures and max errors within a few percent of before. Time per case, hyperbolic class, against ivLam through the same harness: 218 -> 199 ns (ivLam 200); short-way cases near the branch point (`xi`) 233 -> 203 (ivLam 183); short-way table cases 218 -> 205 (ivLam 206); long-way cases unchanged at 127-156 (ivLam 193-200).
 
 **Small batches.** `excali_batch` no longer enters an OpenMP region for batches of at most 8 blocks: entering one costs 200-300 ns per call even when its `if` clause keeps it on one thread. N = 1 in an OpenMP build: 409 -> 230 ns (serial build about 200 ns). A batch of one case now runs `excali_one` itself (no block arrays): about 200 -> 157 ns per call in either build.
+
+## Parameter audit: each path-choosing constant measured (2026-11-09)
+
+Every constant that picks a path was checked against measurements. References are exact: for each double-precision input, the quad-precision root by bisection and quad-precision Lagrange velocities (cases in random 3-D orientation, unless noted).
+
+**Series switch (was `x < 0.3`, now `x < 0.75`, 18 terms, window `|X| <= 1.1`).** Below the switch, roots are refined in `X = ±x^2` with the parabolic series (`tools/pser.py` gives the exact coefficients); above it, the closed form. The closed form cancels: `F` loses `1.5/x^2` ulps and `F'` about `1e3` ulps at `x = 0.3` (190 at 0.5, 10 at 1). With 10 terms the series held only to about `x = 0.45`. Velocity error p99/max in eps, by root:
+
+| root `v` or `w` | 0.30–0.38 | 0.38–0.45 | 0.45–0.53 | 0.60–0.67 | 0.75–0.82 |
+|---|---|---|---|---|---|
+| before (0.3, 10 terms) | 84 / 120 | 55 / 106 | 42 / 74 | 31 / 68 | 19 / 43 |
+| after (0.75, 18 terms) | 7.7 / 14 | 7.0 / 12 | 7.2 / 11 | 7.9 / 16 | 19 / 43 |
+
+Past 0.75 the closed form's excess is at most 2× the floor; 20 terms (to 0.9) cost 2 ns more. A wider series window exposed a too-wide ellipse rectangle: `min(2|X|, ...)` ignored the `sqrt(y)` branch point at `X ~ -2 y0/b`, which approaches 0 for short, nearly equal-radius transfers (1267 eps). The bound now includes `X + 2 y0/(b + y0/2)`; this also halves the old maximum just below 0.3 (43 → 21 eps). Cost: +2.5 ns per case on the 1M mixed dataset (154.7 → 157.5 single, 140.7 → 143.2 batch).
+
+**Near-parabolic window `|t/tp - 1| <= 0.031`.** Accuracy is identical for windows 0.001, 0.01, 0.031 and 0.1, because the rectangle is final; speed is the same within 1 ns. The window must cover `u > 0.99`, where `tabh` ends; extending `tabh` to `u = 1` also works. The series starter is within 0.3% of the bound at 0.031 and 2.9% at 0.1, and leaves the 6.4% budget near 0.2. The window is also the Lagrange f,g flag.
+
+**Velocity switches.** With the exact root, the radial/transverse form is the more accurate (p99 2–3 eps, against f,g at 6–40). On the dataset's own cases, f,g is needed where the endpoints nearly coincide (`cos(theta/2) ~ 1`, `r1 ~ r2`). There `p*cs - c` and `s - ss^2` cancel: the radial form lost up to 1164 eps on parabolic cases at `|t/tp-1| ~ 1e-13`, and doubled the error on the short-way hyperbolas near the branch point, where f,g gave about 1 eps. Removing f,g everywhere was rejected. An axis-aligned harness had wrongly favoured that removal, because there the unit vectors are exact. f,g divides by `g ~ cos(theta/2)`: its error is 14 eps at `cs` 0.3–0.4 and 40 at 0.1–0.2, crossing the radial form's between 0.2 and 0.4, hence `cs > 0.3`. Branch-point `y` from `t` (`y < y0/4`): without it, 38 eps p99 at `1 - w/wb ~ 1e-2`; y0/2 and y0/4 are identical (3.5 eps); y0/8 doubles the error near `1 - w/wb ~ 0.05`.
+
+**OpenMP cutoff (was 8 blocks, now 4), block size 32, dynamic schedule.** Measured over 200k mixed cases, solved in calls of N:
+
+| | serial | parallel beats serial from | region cost per call |
+|---|---|---|---|
+| macOS (Apple M, 6P+2E) | 143–150 ns/case | about 300 (2 threads) to 550 (8) | 7 µs (2 threads) to 50 µs (8) |
+| Linux arm64 (Docker, 8 vCPU) | 182–190 ns/case | about 40 (2–6 threads), 200 (8) | 1.3–2.4 µs, 11 µs at 8 |
+
+No fixed cutoff suits both. Worst-case slowdown against the better of serial and parallel, over N and 2–8 threads: 128 gives 2.4× (macOS) and 2.7× (Linux); 256 gives 1.25× and 3.0×; 64 gives 4.2× and 2.0×. 128 has the smallest worst case. Block sizes 8–64 change serial time by under 2%; at large N, 32 is within 5% of the best on both platforms. Static scheduling is up to 1.5× slower with 6–8 threads on macOS (performance and efficiency cores, and case costs that differ 10×), and equal on Linux.
+
+**Checked and kept, with their reasons in the code or README:**
+- The `tabe`/`long_d` hand-off at `tau = -0.9`: `long_d` is 16% off at -0.89 and 46% at -0.86, and `tabe` ends there. tabe's worst band is 6.8% (documented as 5.9% before).
+- `mrev_edge` boundaries, each moved to about 0.5× and 2× on the 120k + 2×40k `|tau| > 0.9` stress sets: the 2.5 layer limit, the 1.5·x* acceptance, the `x0 < 1` coordinate, the `ve < 0.2` v* coordinate and the 8·x* body test give identical results. The fold-series limit `Delta < 0.003/0.03` fails at half (errors to 1e-6) and is fine at double. The g-model's `mc >= 0.3` fails at 0.45 (1e-4) and is fine at 0.2. Both work where they are, near one edge of their working range.
+
+**Changed:**
+- The `t = t_min` band is now 32 ulps (was 16): `mrev_edge`'s `t_min` is within 4e-15 (18 ulps) of mpmath.
+- The multi-revolution table starter reaches 8% of its bound (`m = 1`, `tau` near -0.9, toward the pole), not the 1.4% documented before.
+
+**Extending the multi-revolution tables past `|tau| = 0.9`:**
+- `mr_c` and `mr_s` on the existing `asin` clustering meet their budgets (1e-7, 6e-5) at 128 points out to 0.97, and at 256 points to 0.99.
+- `mr_q` extends on the short way (within 2.2% to 0.97), but on the long way its error toward the pole grows to 54–308% at `m = 1`.
+- So only a short-way extension, to `tau = 0.97`, is viable. It would cover about 54% of the dataset's off-table multi-revolution cases (the short-way ones). Not done.
+
+Removed: dead branches in `f_derivs` and `time_derivs` (only `v` is ever passed), the redundant `c >= 0.3` test in `rect_ratio`, and the outdated `docs/method` write-up.
+
+Validation: truth suites equal or better than before on macOS and on Linux x86-64 (gcc:14, emulated), with the same failure counts in the known stress categories. ms4d: 120k multi-revolution stress cases, no feasibility disagreements, velocities within 4e-13 of the previous version. ctest 3/3 on macOS and Linux arm64.

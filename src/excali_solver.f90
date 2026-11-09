@@ -48,12 +48,20 @@ module excali_solver
    ! (1-cos(v))/X in X=v**2 (highest first), for the near-parabolic coordinate.
    real(dp),parameter :: cser(9)=[1._dp/6402373705728000._dp,-1._dp/20922789888000._dp,1._dp/87178291200._dp, &
       -1._dp/479001600._dp,1._dp/3628800._dp,-1._dp/40320._dp,1._dp/720._dp,-1._dp/24._dp,.5_dp]
-   ! Parabolic series of (v-sin(v)cos(v))/sin(v)**3 in v**2 (highest first),
-   ! used for |v|<0.3 on zero-revolution arcs where the closed form cancels.
-   real(dp),parameter :: pser(10)=[115665628927._dp/2601853536522240000._dp, &
-      3821869001._dp/10751460894720000._dp,133541._dp/48117888000._dp,763967._dp/36324288000._dp, &
-      1393481._dp/9081072000._dp,1181._dp/1108800,29._dp/4200,17._dp/420,1._dp/5,2._dp/3]
-   real(dp),parameter :: pser2(10)=pser/sqrt(2._dp)
+   ! Parabolic series of (v-sin(v)cos(v))/sin(v)**3 in X=v**2 (highest
+   ! first; tools/pser.py, exact rationals rounded): the first np_ser terms are
+   ! used below |v| = xser, where the closed form cancels.
+   real(dp),parameter :: pall(22)=[ &
+      2.5385536080146795e-19_dp,2.2815003353306558e-18_dp,2.0411206337383377e-17_dp,1.8168877472738951e-16_dp, &
+      1.6082875908543117e-15_dp,1.4148184863190583e-14_dp,1.2359909034625639e-13_dp,1.0713272058734766e-12_dp, &
+      9.2036140117681823e-12_dp,7.8263889454646394e-11_dp,6.5771624198902018e-10_dp,5.4516089237463908e-09_dp, &
+      4.4455088383492994e-08_dp,3.5547438979914857e-07_dp,2.7752880591932877e-06_dp,2.1031850644945883e-05_dp, &
+      1.5344895404419213e-04_dp,1.0651154401154401e-03_dp,6.9047619047619049e-03_dp,4.0476190476190478e-02_dp, &
+      2.0000000000000001e-01_dp,6.6666666666666663e-01_dp]
+   integer,parameter  :: np_ser=18
+   real(dp),parameter :: xser=.75_dp,xwin=1.1_dp
+   real(dp),parameter :: pser(np_ser)=pall(23-np_ser:22)
+   real(dp),parameter :: pser2(np_ser)=pser/sqrt(2._dp)
    ! Zero-revolution starter tables (tools/gen_tables.py).
    include 'excali_tables.inc'
    ! Transfer frame normalized by the larger radius (see geometry).
@@ -154,7 +162,7 @@ contains
       fast=x>0.or.k==0
    endif
    if(fast.and.k/=0)then
-      call fast_coordinate(k,x,m,g%b,wb,lb,ub,kd,c,el,rb,hs,hc)
+      call fast_coordinate(k,x,m,g%y0,g%b,wb,lb,ub,kd,c,el,rb,hs,hc)
       fast=el>0;kr=kexp(el)
       if(fast.and..not.fin)call rect_ratio(kd,c,hs,hc,kr,g%y0,merge(wb,g%yend,kd==-2),g%a,g%b,g%t,m,dd,de)
       if(fast)call fast_accept(kd,c,dd,hs,hc,k,x,fast)
@@ -247,8 +255,11 @@ contains
    call tjet(zs,0,d,zx,th)
    tmin=d(0);t2z=d(2);t3z=d(3)
    status=5;pt=tmin/t                              ! one quantity for both tests
-   if(pt>1+16*epsilon(pt))return
-   if(pt>=1-16*epsilon(pt))then
+   ! t = t_min within 32 ulps: tmin here is within 4e-15 (18 ulps) of the
+   ! exact minimum (mpmath), so a tighter band would call some t = t_min
+   ! infeasible.
+   if(pt>1+32*epsilon(pt))return
+   if(pt>=1-32*epsilon(pt))then
       status=1;x=xs;call sincos_half(x,hs,hc);return
    endif
    ! 2. Starter: z0 in zeta, or x0 in x (z0 = 0 marks the x form).
@@ -378,7 +389,7 @@ contains
          ! A*coth**3*(1-u**2)**(-3/2)
          p=jmul(jmul(jmul(cth,cth),cth),jcomp([1/(w*cu),-1.5_dp/(w*w*cu),3.75_dp/(w**3*cu),-13.125_dp/(w**4*cu)], &
             [w,-2*uj(0)*uj(1),-2*(uj(1)**2+uj(0)*uj(2)),-2*(3*uj(1)*uj(2)+uj(0)*uj(3))]))
-         call f_derivs(xv,1,0,gx,2*u*cu,(cu-u)*(cu+u))  ! G and its x-derivatives
+         call f_derivs(xv,0,gx,2*u*cu,(cu-u)*(cu+u))  ! G and its x-derivatives
          gx=jcomp(gx,jcomp([xv,2/cu,2*u/cu**3,2*(1+2*u*u)/cu**5],uj))
          cj=[ch,sh,ch,sh]
          d=am*p+sy*(sd*yc*jmul(jmul(jmul(cj,cj),cj),gx)+g%a*cj)
@@ -522,14 +533,18 @@ contains
    real(dp),intent(out) :: v1(3,n),v2(3,n)
    integer,intent(out)  :: status(n),half(n)
    integer :: i0
-   ! Chunks are independent; under OpenMP they run in parallel (dynamic
-   ! schedule). Small batches stay serial outside any OpenMP region: entering
-   ! one costs about 200-300 ns per call even when an if clause keeps it on
-   ! one thread.
+   ! Chunks are independent; under OpenMP they run in parallel, dynamically
+   ! scheduled: case costs differ by 10x (multi-revolution edge cases) and
+   ! cores may differ (performance/efficiency), where a static schedule
+   ! measured up to 1.5x slower at large n with 6-8 threads. Batches of at most 4 blocks stay
+   ! serial outside any OpenMP region. A region costs 1-2.5 us per call on
+   ! Linux (parallel pays from about 40 cases) but 8-50 us on macOS, where
+   ! threads are woken per region (from about 300-550 cases); 4 blocks is
+   ! the cutoff with the smallest worst-case loss on both (docs/VALIDATION.md).
    if(n==1)then
       ! One case: the straight-line path (no block arrays), about 20% faster.
       call excali_one(r1(:,1),r2(:,1),tof(1),direction(1),v1(:,1),v2(:,1),status(1),half(1),nrev(1),branch(1))
-   elseif(n<=8*nb)then
+   elseif(n<=4*nb)then
       do i0=1,n,nb
          call one_chunk(i0)
       enddo
@@ -615,7 +630,7 @@ contains
    enddo
    do j=1,nc
       if(.not.fast(j).or.kc(j)==0)cycle
-      call fast_coordinate(kc(j),xc(j),nrev(j),gc(j)%b,wbc(j),lbc(j),ubc(j),kd(j),cc(j),elc,rbc(j),hsc(j),hcc(j))
+      call fast_coordinate(kc(j),xc(j),nrev(j),gc(j)%y0,gc(j)%b,wbc(j),lbc(j),ubc(j),kd(j),cc(j),elc,rbc(j),hsc(j),hcc(j))
       fast(j)=elc>0;krc(j)=kexp(elc)
    enddo
    ! Stage 3: one rectangle each, then its acceptance.
@@ -708,7 +723,7 @@ contains
             enddo
             yv=y0+b*x*ser;y1=b*(ser+x*ser1)
             ff=pser2(1);ff1=0
-            do n=2,10
+            do n=2,np_ser
                ff1=ff1*x+ff;ff=ff*x+pser2(n)
             enddo
             q=sqrt(yv);g=yv*ff+a
@@ -749,7 +764,7 @@ contains
             f1(j)=-(.5_dp*y1/q*g+q*(y1*ff-yv*ff1))*f(j)**2
          enddo
       case default
-         lw=b<0.and.c>=0.3_dp
+         lw=b<0                       ! w >= xser here: the X series covers smaller w
          do j=1,np
             x=c+el*uu(j)
             sh=hs*ct(j)+hc*st(j);ch=hc*ct(j)+hs*st(j)
@@ -833,95 +848,54 @@ contains
       endif
    end subroutine
 
-   !> F and its first three derivatives in x: k=+1, x=v (elliptic);
-   !! k=-1, x=w (hyperbolic, sinh/cosh).
-   pure subroutine f_derivs(x,k,m,f,sx,cx)
-   real(dp),intent(in)  :: x
-   integer,intent(in)   :: k,m
+   !> F and its first three derivatives in v (elliptic, m revolutions), from
+   !! s = sin(v) and c = cos(v): the parabolic series below xser for m = 0,
+   !! else the closed form.
+   pure subroutine f_derivs(x,m,f,s,c)
+   real(dp),intent(in)  :: x,s,c
+   integer,intent(in)   :: m
    real(dp),intent(out) :: f(0:3)
-   real(dp),optional,intent(in) :: sx,cx   ! sin/cos (sinh/cosh) of x if known
-   real(dp) :: s,c,r,g(0:3),xx
+   real(dp) :: r,g(0:3),xx
    integer  :: j
-   if(k==2)then
-      if(present(sx))then
-         s=sx;c=cx
-      else
-         s=sin(x);c=cos(x)
-      endif
-      r=1/s
-      f(0)=((m+1)*pi-x+s*c)/sqrt2*r**3
-      f(1)=(-sqrt2-3*c*f(0))*r
-      f(2)=(3*s*f(0)-4*c*f(1))*r
-      f(3)=(3*c*f(0)+7*s*f(1)-5*c*f(2))*r
-   elseif(m==0.and.x<0.3_dp)then
-      ! Parabolic series G(X), X=k*x**2, with Taylor coefficients g(j)=G^(j)/j!.
-      xx=k*x*x;g=0;g(0)=pser(1)
-      do j=2,10
+   if(m==0.and.x<xser)then
+      ! Parabolic series G(X), X=x**2, with Taylor coefficients g(j)=G^(j)/j!.
+      xx=x*x;g=0;g(0)=pser(1)
+      do j=2,np_ser
          g(3)=g(3)*xx+g(2);g(2)=g(2)*xx+g(1);g(1)=g(1)*xx+g(0);g(0)=g(0)*xx+pser(j)
       enddo
       g=g/sqrt2
-      f(0)=g(0);f(1)=2*k*x*g(1);f(2)=8*x*x*g(2)+2*k*g(1);f(3)=48*k*x**3*g(3)+24*x*g(2)
+      f(0)=g(0);f(1)=2*x*g(1);f(2)=8*x*x*g(2)+2*g(1);f(3)=48*x**3*g(3)+24*x*g(2)
    else
-      ! Closed form and the ODE  s*F' + 3*c*F = sqrt2  (s'=c, c'=-k*s).
-      if(present(sx))then
-         s=sx;c=cx
-      elseif(k>0)then
-         s=sin(x);c=cos(x)
-      else
-         call shch(x,s,c)
-      endif
+      ! Closed form and the ODE  s*F' + 3*c*F = sqrt2  (s'=c, c'=-s).
       r=1/s
-      f(0)=k*(x+m*pi-s*c)/sqrt2*r**3
+      f(0)=(x+m*pi-s*c)/sqrt2*r**3
       f(1)=(sqrt2-3*c*f(0))*r
-      f(2)=(3*k*s*f(0)-4*c*f(1))*r
-      f(3)=(3*k*c*f(0)+7*k*s*f(1)-5*c*f(2))*r
+      f(2)=(3*s*f(0)-4*c*f(1))*r
+      f(3)=(3*c*f(0)+7*s*f(1)-5*c*f(2))*r
    endif
    end subroutine f_derivs
 
-   !> T and its first three derivatives in the anomaly coordinate x (k as above).
-   pure subroutine time_derivs(x,k,m,y0,yend,a,b,d,hsx,hcx)
-   real(dp),intent(in)  :: x,y0,yend,a,b
-   integer,intent(in)   :: k,m
+   !> T and its first three derivatives in v (elliptic), from sh, ch =
+   !! sin(v/2), cos(v/2).
+   pure subroutine time_derivs(x,m,y0,yend,a,b,d,sh,ch)
+   real(dp),intent(in)  :: x,y0,yend,a,b,sh,ch
+   integer,intent(in)   :: m
    real(dp),intent(out) :: d(0:3)
-   real(dp),optional,intent(in) :: hsx,hcx   ! sin/cos(x/2) if known (k>0)
-   real(dp) :: sh,ch,s,c,y,y1,y2,y3,f(0:3),q,q1,q2,q3,p,p1,p2,p3
-   if(k>0)then
-      if(present(hsx))then
-         sh=hsx;ch=hcx
-      else
-         sh=sin(x/2);ch=cos(x/2)
-      endif
-      c=(ch-sh)*(ch+sh)
-   endif
-   if(k==2)then
-      y=y0+2*b*ch*ch
-      if(b<0)y=yend-2*b*sh*sh
-   elseif(k>0)then
-      if(b>=0)then
-         y=y0+2*b*sh*sh
-      else
-         y=yend-2*b*ch*ch
-      endif
+   real(dp) :: s,c,y,y1,y2,y3,f(0:3),q,q1,q2,q3,p,p1,p2,p3
+   c=(ch-sh)*(ch+sh)
+   if(b>=0)then
+      y=y0+2*b*sh*sh
    else
-      call shch(x/2,sh,ch);c=1+2*sh*sh
-      y=y0-2*b*sh*sh
+      y=yend-2*b*ch*ch
    endif
    s=2*sh*ch
-   y1=k*b*s;y2=k*b*c;y3=-b*s
-   if(k==2)then
-      y1=-b*s;y2=-b*c;y3=b*s
-   endif
-   call f_derivs(x,k,m,f,s,c)
+   y1=b*s;y2=b*c;y3=-b*s
+   call f_derivs(x,m,f,s,c)
    q=sqrt(y);q1=y1/(2*q);q2=(y2/2-q1*q1)/q;q3=(y3/2-3*q1*q2)/q
    p=y*f(0)+a;p1=y1*f(0)+y*f(1);p2=y2*f(0)+2*y1*f(1)+y*f(2)
    p3=y3*f(0)+3*y2*f(1)+3*y1*f(2)+y*f(3)
    d(0)=q*p
    d(1)=q1*p+q*p1
-   if(k<0.and.b<0.and.x>=0.3_dp)then
-      p=((y0+b)*c-b)/s**2-y*x/s**3
-      p1=(y0+b)/s-2*((y0+b)*c-b)*c/s**3-(y1*x+y)/s**3+3*y*x*c/s**4
-      d(0)=q*p/sqrt2;d(1)=(q1*p+q*p1)/sqrt2
-   endif
    d(2)=q2*p+2*q1*p1+q*p2
    d(3)=q3*p+3*q2*p1+3*q1*p2+q*p3
    end subroutine time_derivs
@@ -1148,7 +1122,7 @@ contains
       real(dp),intent(in)::y0,a,b,t,tp
       real(dp),intent(out)::xx,rc       ! X, and the relative size of its second-order term
       real(dp)::q0,q1,q2,g0,g1,g2,p0,p1,p2,t1,t2,d
-      g0=pser2(10);g1=pser2(9);g2=pser2(8)
+      g0=pser2(np_ser);g1=pser2(np_ser-1);g2=pser2(np_ser-2)
       q0=sqrt(y0);q1=b/(4*q0);q2=(-b/24-q1*q1)/(2*q0)
       p0=y0*g0+a;p1=y0*g1+b/2*g0;p2=y0*g2+b/2*g1-b/24*g0
       t1=q0*p1+q1*p0;t2=q0*p2+q1*p1+q2*p0
@@ -1245,9 +1219,9 @@ contains
       real(dp),intent(out)::f,f1
       real(dp)::xx
       integer::j
-      if(w<.3_dp)then
+      if(w<xser)then
          xx=-w*w;f=pser2(1);f1=0
-         do j=2,10
+         do j=2,np_ser
             f1=f1*xx+f;f=f*xx+pser2(j)
          enddo
          f1=-2*w*f1
