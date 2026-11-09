@@ -512,8 +512,9 @@ contains
 
 
    ! Batch of normalized solves, same arguments per case as excali_one, in
-   ! chunks of nb cases through solve_chunk (the code excali_one runs with
-   ! one case), so the results are identical.
+   ! chunks of nb cases through solve_chunk (the same stages as excali_one;
+   ! results agree to rounding and statuses are identical). A batch of one
+   ! case runs excali_one itself.
    subroutine excali_batch(n,r1,r2,tof,direction,v1,v2,status,half,nrev,branch)
    integer,intent(in)   :: n
    real(dp),intent(in)  :: r1(3,n),r2(3,n),tof(n)
@@ -525,7 +526,10 @@ contains
    ! schedule). Small batches stay serial outside any OpenMP region: entering
    ! one costs about 200-300 ns per call even when an if clause keeps it on
    ! one thread.
-   if(n<=8*nb)then
+   if(n==1)then
+      ! One case: the straight-line path (no block arrays), 7% faster.
+      call excali_one(r1(:,1),r2(:,1),tof(1),direction(1),v1(:,1),v2(:,1),status(1),half(1),nrev(1),branch(1))
+   elseif(n<=8*nb)then
       do i0=1,n,nb
          call one_chunk(i0)
       enddo
