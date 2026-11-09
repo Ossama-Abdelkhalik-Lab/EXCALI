@@ -527,7 +527,7 @@ contains
    ! one costs about 200-300 ns per call even when an if clause keeps it on
    ! one thread.
    if(n==1)then
-      ! One case: the straight-line path (no block arrays), 7% faster.
+      ! One case: the straight-line path (no block arrays), about 20% faster.
       call excali_one(r1(:,1),r2(:,1),tof(1),direction(1),v1(:,1),v2(:,1),status(1),half(1),nrev(1),branch(1))
    elseif(n<=8*nb)then
       do i0=1,n,nb
