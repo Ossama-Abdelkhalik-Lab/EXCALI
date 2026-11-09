@@ -76,7 +76,7 @@
          do i=1,n1+2
             z=vs+el*u8(i)
             call sincos_half(z,sn,cn)
-            call time_derivs(z,1,m,g%y0,g%yend,g%a,g%b,dd,sn,cn)
+            call time_derivs(z,m,g%y0,g%yend,g%a,g%b,dd,sn,cn)
             s=2*sn*cn;co=(cn-sn)*(cn+sn)
             if(i<=n1)then
                xn(i)=z;ff(i)=1/(dd(1)*s**4);fp(i)=-(dd(2)*s+4*dd(1)*co)*s**3*ff(i)**2
@@ -89,12 +89,12 @@
          call global_ratio(n1,ff,fp,fa,fb,vs-el,vs+el,xn,w8(1:n1)*el,vs,x,err)
          vs=x
          call sincos_half(vs,sn,cn)
-         call time_derivs(vs,1,m,g%y0,g%yend,g%a,g%b,dd,sn,cn)
+         call time_derivs(vs,m,g%y0,g%yend,g%a,g%b,dd,sn,cn)
          pt=dd(0)/g%t                               ! one quantity for both tests
          stat=5
-         if(pt>1+16*epsilon(pt))return
+         if(pt>1+32*epsilon(pt))return            ! the band of mrev_edge
          stat=3
-         if(pt>=1-16*epsilon(pt))return
+         if(pt>=1-32*epsilon(pt))return
          ut=cbrt_c(pt);sg=br*sqrt((1-pt)/(1+ut+ut*ut))
          k=sqrt(6*dd(0)/dd(2))
          x=vs+k*sg*(1-dd(3)*k*sg/(6*dd(2)))
@@ -127,7 +127,12 @@
          tp=sqrt(g%y0)*(g%y0*sqrt2/3+g%a)
          k=0;x=0;wb=0;fin=.false.;near=.false.
          if(abs(g%t-tp)<=4*epsilon(tp)*tp)return    ! parabola
-         near=abs(g%t-tp)<=.031_dp*tp      ! the series window (tabh starts at u=0.99)
+         ! The series window. It must reach u = 0.99 on the hyperbolic side,
+         ! where tabh ends; its second-order starter is within 0.3% of R
+         ! here (2.9% at 0.1, past the budget beyond about 0.2), and windows
+         ! from 0.001 to 0.1 give identical results (the rectangle is
+         ! final). It also selects Lagrange f,g velocities (see velocities).
+         near=abs(g%t-tp)<=.031_dp*tp
          k=1
          if(g%t<tp)then
             k=-1;u=g%t/tp
@@ -210,9 +215,9 @@
       ! root can be as close as 2R and t_min's rounding noise is largest),
       ! rounded down to a power of two by kexp (el<=1 keeps the node tables in
       ! range): error about (L/2R)**16 <= 8**-16.
-      pure subroutine fast_coordinate(k,x,m,b,wb,lo,hi,kind1,c,el,rb,hs,hc)
+      pure subroutine fast_coordinate(k,x,m,y0,b,wb,lo,hi,kind1,c,el,rb,hs,hc)
          integer,intent(in)::k,m
-         real(dp),intent(in)::x,b,wb,lo,hi
+         real(dp),intent(in)::x,y0,b,wb,lo,hi
          integer,intent(out)::kind1
          real(dp),intent(out)::c,el,rb,hs,hc
          hs=0;hc=1;kind1=k;c=x
@@ -220,10 +225,11 @@
             el=min(c-lo,hi-c);rb=el;el=el/8
             call sincos_half(c,hs,hc)
             return
-         elseif(abs(k)==1.and.x<.3_dp)then
+         elseif(abs(k)==1.and.x<xser)then
             kind1=0;c=k*x*x
-            el=min(abs(c),.2_dp-abs(c))
-            if(k>0)el=min(2*abs(c),.2_dp-abs(c))
+            el=min(abs(c),xwin-abs(c))
+            if(k>0)el=min(2*abs(c),xwin-abs(c))
+            if(k>0.and.b>0)el=min(el,c+2*y0/(b+y0/2))
             if(k<0.and.b>0)el=min(el,wb*wb-abs(c))
          elseif(k>0)then
             el=min(c,pi-c)                   ! k=2: x is already pi-v
@@ -270,8 +276,15 @@
       end subroutine
 
       ! Velocities from the root x in coordinate k with half-angle functions
-      ! sw, dw: radial and transverse components, cancellation-free, or near the parabola and the
-      ! short-way branch point (fine) Lagrange f,g from the exact inputs.
+      ! sw, dw: radial and transverse components, cancellation-free, or
+      ! Lagrange f,g from the exact inputs near the parabola (fine) and the
+      ! short-way branch point. Given the exact root the radial form is the
+      ! more accurate (2-3 eps); f,g is there for endpoints that nearly
+      ! coincide (theta -> 0, r1 ~ r2), where p*cs-c and s-ss**2 cancel and
+      ! the radial form lost up to 1e3 eps on the reference dataset (f,g: 2).
+      ! f,g divides by g ~ cos(theta/2): its error grows like 1/cs (14 eps at
+      ! cs 0.3-0.4, 40 at 0.1-0.2), crossing the radial form's between cs
+      ! 0.2 and 0.4, hence cs > 0.3.
       pure subroutine velocities(g,r1,r2,direction,k,x,sw,dw,fine,v1,v2)
          type(frame),intent(in)::g
          real(dp),intent(in)::r1(3),r2(3),x,sw,dw
@@ -308,7 +321,10 @@
             ! Short way near the branch point, y cancels; T = sqrt(y)*(y*F+a) = t
             ! gives it with that error reduced by y*F/(y*F+a) when a
             ! dominates, and the half-angle functions follow from it in
-            ! cancellation-free form.
+            ! cancellation-free form. Measured against quad references:
+            ! without this step 38 eps (p99) at 1-w/wb ~ 1e-2; y0/2 and y0/4
+            ! give identical results (3.5 eps), y0/8 switches too late
+            ! (twice the error at 1-w/wb ~ 0.05).
             if(g%b>0.and.y<g%y0/4)then
                call fhyp_d(x,2*sh*ch,c,dc,s);dc=y*dc
                if(dc<g%a)then
