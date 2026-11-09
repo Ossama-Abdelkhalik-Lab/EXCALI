@@ -271,7 +271,7 @@
 
       ! Velocities from the root x in coordinate k with half-angle functions
       ! sw, dw: radial and transverse components, cancellation-free, or near the parabola and the
-      ! short-way branch point (fine) Lagrange f,g in double-double.
+      ! short-way branch point (fine) Lagrange f,g from the exact inputs.
       pure subroutine velocities(g,r1,r2,direction,k,x,sw,dw,fine,v1,v2)
          type(frame),intent(in)::g
          real(dp),intent(in)::r1(3),r2(3),x,sw,dw
@@ -321,8 +321,8 @@
          dc=p*g%cs-c
          if(p*g%cs*c>0.and.abs(p*g%cs+c)>0.5_dp)dc=(s-g%ss*g%ss)/(p*g%cs+c)
          if(fg.and.g%cs>.3_dp)then
-            ! Lagrange f,g from the exact inputs: correctly rounded for this y
-            ! (radial/transverse needs the rounded unit vectors).
+            ! Lagrange f,g from the exact inputs (radial/transverse needs the
+            ! rounded unit vectors, which lose accuracy here).
             call fg_velocities(r1,r2,y,g%scale,direction,v1,v2)
          else
             ! With q=s1-s2: (r2-r1)/(r1*(s2/s1+1)) = -q/s1, and vt uses s2/s1.

@@ -696,3 +696,18 @@ Every merged version was timed on the same cases (zero_rev.csv 100,000 and multi
 - **Agreement.** No status differs between `excali_one` and `excali_batch` on any dataset. Velocities agree to rounding (at most 8e-15 relative on zero_rev, dev, harness_mixed, sweep_zero); where the problem amplifies rounding they differ up to 1.6e-12 (multi-revolution near `t_min`) and 2.3e-10 (adversarial ill-conditioned cases). The cause is different multiply-add fusion in the two inlined copies; neither is more accurate.
 - **Multiple revolutions** crept up about 15% over #6, #9-#11 and #13 with no single cause; the `asin` in the `mr_q` index (#11) costs 1-2 ns.
 - **Results.** Every validation summary (truth sets, zs2, hs, ps, ms, ms4d, ms6, ms7) is identical to the previous build. CTest 3/3. Linux x86-64 (Docker): comparison EXCALI test 0 bad in all five classes; the multi-revolution stress sets have no `-4`.
+
+## Plain-double f,g velocities; no OpenMP region for small batches (2026-11-08)
+
+**f,g velocities.** Near the parabola and the short-way branch point the Lagrange f,g velocities were evaluated in double-double. They are now plain double, `v1 = (r2-r1 + (y/|r1|) r1)/g`, `v2 = (r2-r1 - (y/|r2|) r2)/g`. On the 1,000,009-case hard mixed dataset (Apple M1 Pro, `excali_one`, against the dataset's reference velocities):
+
+| Class (cases) | | p50 | p99 | p99.9 | max |
+|---|---|---|---|---|---|
+| hyperbolic (333,333) | double-double | 3.95e-16 | 2.80e-15 | 2.76e-14 | 2.40e-12 |
+| | plain | 4.06e-16 | 2.81e-15 | 2.75e-14 | 2.40e-12 |
+| parabolic (333,333) | double-double | 2.75e-16 | 2.94e-15 | 2.69e-14 | 7.67e-11 |
+| | plain | 2.75e-16 | 2.94e-15 | 2.69e-14 | 7.67e-11 |
+
+The two evaluations differ by at most 4.3 ulp on the hyperbolic cases (p99.9 2.0) and 21 ulp on the parabolic ones (radius ratio near 150, where `1 - y/|r2|` cancels; double-double is closer to the reference in about half the changed cases, since `y` carries its own rounding). The truth suites show no new failures and max errors within a few percent of before. Time per case, hyperbolic class, against ivLam through the same harness: 218 -> 199 ns (ivLam 200); short-way cases near the branch point (`xi`) 233 -> 203 (ivLam 183); short-way table cases 218 -> 205 (ivLam 206); long-way cases unchanged at 127-156 (ivLam 193-200).
+
+**Small batches.** `excali_batch` no longer enters an OpenMP region for batches of at most 8 blocks: entering one costs 200-300 ns per call even when its `if` clause keeps it on one thread. N = 1 in an OpenMP build: 409 -> 230 ns (serial build about 200 ns). A batch of one case now runs `excali_one` itself (no block arrays): about 200 -> 157 ns per call in either build.
