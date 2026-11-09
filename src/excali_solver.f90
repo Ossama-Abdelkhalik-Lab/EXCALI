@@ -266,7 +266,11 @@ contains
    ut=cbrt_c(pt);sg=sd*br*sqrt((1-pt)/(1+ut+ut*ut))  ! sg > 0: zeta > zeta*
    crowd=sg<0;z0=0;x0=0
    dl=(t-tmin)/abs(tmin-am)
-   if(dl<merge(.003_dp,.03_dp,g%b>0))then
+   ! Fold-series zone. Short way Delta < 0.003: errors are fine from 0.0005
+   ! to 0.1, with fewer status-2 flags below and a lower maximum error at
+   ! 0.003 and above. Long way Delta < 0.1: log-centred in its working
+   ! range 0.02-0.5 (4e-8..4e-5 errors at 0.015 and below).
+   if(dl<merge(.003_dp,.1_dp,g%b>0))then
       kk=sqrt(6*tmin/t2z);z0=zs+kk*sg*(1-t3z*kk*sg/(6*t2z))
    elseif(g%b>0)then
       if(crowd)then
@@ -304,7 +308,9 @@ contains
          if(t>am)z0=atanh(cbrt_c(am/t))
          if(z0>0.and.z0<2.5_dp)then
             continue                                  ! pole layer, exact
-         elseif(mc>=.3_dp.or.(mc>=.05_dp.and.dl<1))then
+         ! g-model thresholds log-centred in their working ranges: crowded
+         ! side 0.05-0.4, far side 0.05-0.25 (errors 2e-9..1e-4 at 0.35+).
+         elseif(mc>=.15_dp.or.(mc>=.05_dp.and.dl<1))then
             z0=0;x0=xs*g_root(mc,dh,.false.)
          elseif(t>am)then
             z0=0;x0=cubic_pos(2*(t-am)/b15,2*cc/b15)
@@ -319,7 +325,7 @@ contains
             x0=cubic_pos((t-am)/al,cc/al)
          endif
       else
-         if(mc>=.3_dp)x0=xs*g_root(mc,dh,.true.)
+         if(mc>=.1_dp)x0=xs*g_root(mc,dh,.true.)
          if(.not.(x0>0.and.x0<1.5_dp*xs))then
             ! Body plus the layer term cc/d**2, offset to t_min at d*: the body
             ! roots without the layer (x1) and with its value at d* (x0)

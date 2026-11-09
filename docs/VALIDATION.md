@@ -740,7 +740,7 @@ No fixed cutoff suits both. Worst-case slowdown against the better of serial and
 
 **Checked and kept, with their reasons in the code or README:**
 - The `tabe`/`long_d` hand-off at `tau = -0.9`: `long_d` is 16% off at -0.89 and 46% at -0.86, and `tabe` ends there. tabe's worst band is 6.8% (documented as 5.9% before).
-- `mrev_edge` boundaries, each moved to about 0.5× and 2× on the 120k + 2×40k `|tau| > 0.9` stress sets: the 2.5 layer limit, the 1.5·x* acceptance, the `x0 < 1` coordinate, the `ve < 0.2` v* coordinate and the 8·x* body test give identical results. The fold-series limit `Delta < 0.003/0.03` fails at half (errors to 1e-6) and is fine at double. The g-model's `mc >= 0.3` fails at 0.45 (1e-4) and is fine at 0.2. Both work where they are, near one edge of their working range.
+- `mrev_edge` boundaries, each moved to about 0.5× and 2× on the 120k + 2×40k `|tau| > 0.9` stress sets: the 2.5 layer limit, the 1.5·x* acceptance, the `x0 < 1` coordinate, the `ve < 0.2` v* coordinate and the 8·x* body test give identical results. The fold-series limit `Delta < 0.003/0.03` and the g-model's `mc >= 0.3` were near one edge of their working ranges; see the next section.
 
 **Changed:**
 - The `t = t_min` band is now 32 ulps (was 16): `mrev_edge`'s `t_min` is within 4e-15 (18 ulps) of mpmath.
@@ -754,3 +754,18 @@ No fixed cutoff suits both. Worst-case slowdown against the better of serial and
 Removed: dead branches in `f_derivs` and `time_derivs` (only `v` is ever passed), the redundant `c >= 0.3` test in `rect_ratio`, and the outdated `docs/method` write-up.
 
 Validation: truth suites equal or better than before on macOS and on Linux x86-64 (gcc:14, emulated), with the same failure counts in the known stress categories. ms4d: 120k multi-revolution stress cases, no feasibility disagreements, velocities within 4e-13 of the previous version. ctest 3/3 on macOS and Linux arm64.
+
+## Boundary centring in mrev_edge (2026-11-09)
+
+The audit above found two `mrev_edge` boundaries near one edge of their working ranges. Each part was swept separately on ms4d (120k) and ms6/ms7 (40k each, `|tau| > 0.9`). The table lists the max arrival error (base: 6.2e-12, 5.5e-12, 3.4e-4 by band) and the status-2 count:
+
+| boundary | was | breaks at | works over | now |
+|---|---|---|---|---|
+| fold-series `Delta`, short way | 0.003 | none found (0.0005–0.1) | ≥ 2 decades | 0.003 (kept) |
+| fold-series `Delta`, long way | 0.03 | ≤ 0.015 (4e-8 to 4e-5) | 0.02–0.5 | 0.1 |
+| g-model `mc`, crowded side | 0.3 | 0.45 (2.5e-13 on ms7) | 0.05–0.4 | 0.15 |
+| g-model `mc`, far side | 0.3 | 0.35 (2.4e-9), 0.4 (7.9e-5) | 0.05–0.25 | 0.1 |
+
+The earlier half-value failure of `Delta` was its long-way part. The short-way value stays: raising it adds status-2 flags (ms7: 6613 at 0.003, 6690 at 0.1), and lowering it raises the max error slightly (7.4e-12). New values sit at the log-middle of their ranges.
+
+Combined: the same max errors in every band, no ms4d feasibility disagreements, velocities within 4e-12 of the previous version, ms6 status-2 count unchanged and ms7 +12 of 40k. Truth suites identical; ctest 3/3.
