@@ -1,13 +1,13 @@
-! EXACT v1 (reference, code as received 2026-10-19): Lambert solver, elliptic single-revolution transfers.
+! EXCALI v0 (reference, code as received 2026-10-19): Lambert solver, elliptic single-revolution transfers.
 !   1. coarse contour: fixed half circle center 2 pi^2, radius 19.5, 17 points (trapezoid), complex sin/cos/sqrt
 !      evaluated from cached values
 !   2. fine contour: half circle around the coarse root, radius <= 2, 9 points (trapezoid)
 !   3. one complex-step Newton correction
-! Build for the benchmark with -DEXACT_STANDALONE plus tools/v1_wrapper.f90 (exposes rectsolution).
-#ifndef EXACT_STANDALONE
+! Build for the benchmark with -DEXCALI_V0_STANDALONE plus tools/v1_wrapper.f90 (exposes rectsolution).
+#ifndef EXCALI_V0_STANDALONE
 #include "fintrf.h"
 #endif
-module exact_mod_fast
+module excali_v0_mod
     use omp_lib
     implicit none
     integer, parameter :: dp = selected_real_kind(15, 307)
@@ -89,7 +89,7 @@ contains
         cos_w = cmplx(cs * ch, -sn * sh, dp)
     end subroutine fast_cpx_trig
 
-    subroutine exactsolution(R1, R2, dt, mu, H, V1, V2, Q)
+    subroutine excali_v0_solution(R1, R2, dt, mu, H, V1, V2, Q)
         integer, intent(in) :: Q
         real(dp), intent(in) :: R1(3,Q), R2(3,Q), dt(Q), mu, H(3)
         real(dp), intent(out) :: V1(3,Q), V2(3,Q)
@@ -242,12 +242,12 @@ contains
             V2(2,k) = (dg*R2(2,k) - R1(2,k)) * inv_g
             V2(3,k) = (dg*R2(3,k) - R1(3,k)) * inv_g
         end do
-    end subroutine exactsolution
-end module exact_mod_fast
+    end subroutine excali_v0_solution
+end module excali_v0_mod
 
-#ifndef EXACT_STANDALONE
+#ifndef EXCALI_V0_STANDALONE
 subroutine mexFunction(nlhs, plhs, nrhs, prhs)
-    use exact_mod_fast
+    use excali_v0_mod
     use iso_c_binding
     implicit none
 
@@ -272,6 +272,6 @@ subroutine mexFunction(nlhs, plhs, nrhs, prhs)
     call c_f_pointer(transfer(mxGetPr(plhs(1)), c_null_ptr), V1, [3, Q])
     call c_f_pointer(transfer(mxGetPr(plhs(2)), c_null_ptr), V2, [3, Q])
 
-    call exactsolution(R1, R2, dt, mu_array(1), H, V1, V2, Q)
+    call excali_v0_solution(R1, R2, dt, mu_array(1), H, V1, V2, Q)
 end subroutine mexFunction
 #endif

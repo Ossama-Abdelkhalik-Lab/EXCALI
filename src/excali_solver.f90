@@ -1,5 +1,5 @@
 ! EXCALI (EXact Cauchy-Analytic Lambert Integration): Lambert's problem for
-! every conic and revolution count from the zero-height limit of Exact v2.2's
+! every conic and revolution count from the zero-height limit of EXCALI v1's
 ! thin-rectangle ratio, root = c + Q[((x-c)f)']/Q[f'], f = 1/(T-t), by real
 ! Gauss-Legendre quadrature. Every case takes one path: a table or closed-form
 ! starter and one fixed rectangle, its result final, with no search,

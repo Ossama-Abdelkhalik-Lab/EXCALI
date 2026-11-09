@@ -1,21 +1,21 @@
-! Adapters only: imported Exact v2.2 kernels remain byte-for-byte unchanged.
-module exact_adapter
+! Adapters only: imported EXCALI v1 kernels are unchanged apart from their names.
+module excali_v1_adapter
    use iso_fortran_env, only: real64
    use ieee_arithmetic
-   use exact_original_serial, only: serial_solve=>rectsolution, serial_init=>init_cache
-   use exact_original_vector, only: vector_solve=>rectsolution, vector_init=>init_cache
+   use excali_v1_serial, only: serial_solve=>rectsolution, serial_init=>init_cache
+   use excali_v1_vector, only: vector_solve=>rectsolution, vector_init=>init_cache
    implicit none
    private
    integer,parameter::dp=real64
-   public::exact_initialize,exact_one,exact_batch
+   public::excali_v1_initialize,excali_v1_one,excali_v1_batch
 contains
-   subroutine exact_initialize()
+   subroutine excali_v1_initialize()
       ! Call once, serially, before entering any parallel solve region.
       call serial_init()
       call vector_init()
    end subroutine
 
-   subroutine exact_one(vector,r1,r2,tof,d,m,b,v1,v2,status,half)
+   subroutine excali_v1_one(vector,r1,r2,tof,d,m,b,v1,v2,status,half)
       logical,intent(in)::vector
       real(dp),intent(in)::r1(3),r2(3),tof
       integer,intent(in)::d,m,b
@@ -44,7 +44,7 @@ contains
       if(all(ieee_is_finite(v1)).and.all(ieee_is_finite(v2)))status=0
    end subroutine
 
-   subroutine exact_batch(vector,n,r1,r2,tof,d,m,b,v1,v2,status,half)
+   subroutine excali_v1_batch(vector,n,r1,r2,tof,d,m,b,v1,v2,status,half)
       logical,intent(in)::vector
       integer,intent(in)::n,d(n),m(n),b(n)
       real(dp),intent(in)::r1(3,n),r2(3,n),tof(n)
