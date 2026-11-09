@@ -1,22 +1,22 @@
 [
   {
     "path": "original/CHANGES.txt",
-    "sha256": "5e196d99198828ab9f9d89cd530adffbe9bf4c651362a69e113bc36b28a55306"
+    "sha256": "a8163df1f20771f0524d82f34877992b0e3ba567afc19d5b5fb78a06eedb0f47"
   },
   {
     "path": "original/README.txt",
-    "sha256": "c91bf00f8a6dfd145f3abd6fa80c41ad17da3c4a6ed539bf433c3dacd48d8653"
+    "sha256": "4bb3f0c374b2fff3da831f05ec89d0f2f8b5f18152509c7e8c93e7a9a18f2bd7"
   },
   {
-    "path": "original/exact_ser.F90",
-    "sha256": "bf04433d8ed0d9fa5e8947825501b8aab351b697d66380c595c0defe99d3b797"
+    "path": "original/excali_v0.F90",
+    "sha256": "bb4be6722e073b3785ce62037ceb01b85834312b86869d3850795b4b92401242"
   },
   {
-    "path": "original/exact_v1.F90",
-    "sha256": "bf0c2c690f9601d5663780529a864cb08b1324d83bee5cc283ced38d95486470"
+    "path": "original/excali_v1_ser.F90",
+    "sha256": "5076492fe7f95492dc2ff5819a79f1827451e9338131743feac9ec5282edbed4"
   },
   {
-    "path": "original/exact_vect.F90",
-    "sha256": "d2613d929bd40ac1f0dbb4ead7d495572cd33e316ef4507e3114fa73c6807ea0"
+    "path": "original/excali_v1_vect.F90",
+    "sha256": "6d016655e7920d5676891220a43e29cf5954eaa5d655a23a4d9d5716a6530354"
   }
 ]
