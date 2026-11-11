@@ -21,13 +21,13 @@ contains
       integer,intent(in)::d,m,b
       real(dp),intent(out)::v1(3),v2(3)
       integer,intent(out)::status,half
-      real(dp)::h(3),a,c,x(3,1),y(3,1)
+      real(dp)::h(3),a,c,x(3,1),y(3,1),p(3,1),q(3,1),t(1)
       v1=ieee_value(0._dp,ieee_quiet_nan);v2=v1;status=-1;half=0
       if(.not.all(ieee_is_finite(r1)).or..not.all(ieee_is_finite(r2)))return
       if(.not.ieee_is_finite(tof).or.tof<=0.or.abs(d)/=1.or.abs(b)/=1.or.m<0)return
-      a=norm2(r1);c=norm2(r2)
+      a=len3(r1);c=len3(r2)
       if(a<=0.or.c<=0)return
-      h=cross(r1/a,r2/c);a=norm2(h)
+      h=cross(r1/a,r2/c);a=len3(h)
       if(a<32*epsilon(a))then
          status=-2;half=-1;return
       endif
@@ -35,10 +35,13 @@ contains
       status=-6 ! the original kernels solve zero-revolution ellipses only
       if(m/=0)return
       h=h*(d/a)
+      ! Plain copies into (3,1) arrays: reshape goes through a generic runtime
+      ! routine in gfortran, which cost 80-100 ns per single-case call.
+      p(:,1)=r1;q(:,1)=r2;t(1)=tof
       if(vector)then
-         call vector_solve(reshape(r1,[3,1]),reshape(r2,[3,1]),[tof],1._dp,h,x,y,1)
+         call vector_solve(p,q,t,1._dp,h,x,y,1)
       else
-         call serial_solve(reshape(r1,[3,1]),reshape(r2,[3,1]),[tof],1._dp,h,x,y,1)
+         call serial_solve(p,q,t,1._dp,h,x,y,1)
       endif
       v1=x(:,1);v2=y(:,1);status=-4
       if(all(ieee_is_finite(v1)).and.all(ieee_is_finite(v2)))status=0
@@ -65,8 +68,8 @@ contains
             p(:,j)=[1._dp,0._dp,0._dp];q(:,j)=[0._dp,1._dp,0._dp];t(j)=2._dp
             if(.not.all(ieee_is_finite(r1(:,k))).or..not.all(ieee_is_finite(r2(:,k))))cycle
             if(.not.ieee_is_finite(tof(k)).or.tof(k)<=0.or.abs(d(k))/=1.or.abs(b(k))/=1.or.m(k)<0)cycle
-            a=norm2(r1(:,k));c=norm2(r2(:,k));if(a<=0.or.c<=0)cycle
-            e(:,j)=r1(:,k)/a;h=cross(e(:,j),r2(:,k)/c);hn=norm2(h)
+            a=len3(r1(:,k));c=len3(r2(:,k));if(a<=0.or.c<=0)cycle
+            e(:,j)=r1(:,k)/a;h=cross(e(:,j),r2(:,k)/c);hn=len3(h)
             if(hn<32*epsilon(a))then
                status(k)=-2;half(k)=-1;cycle
             endif
@@ -92,6 +95,14 @@ contains
       enddo
       !$omp end parallel do
    end subroutine
+   ! |x| as sqrt(x.x): gfortran's norm2 rescales term by term (a division per
+   ! element), which showed up in single-case calls; these inputs are far
+   ! from overflow (finite checks first, normalized units).
+   pure real(dp) function len3(x)
+      real(dp),intent(in)::x(3)
+      len3=sqrt(x(1)*x(1)+x(2)*x(2)+x(3)*x(3))
+   end function
+
    pure function cross(a,b) result(c)
       real(dp),intent(in)::a(3),b(3)
       real(dp)::c(3)
