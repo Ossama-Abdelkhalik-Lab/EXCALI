@@ -931,3 +931,52 @@ ctest 4/4.
 | x86-64 | 0.87× | 0.97× | 1.07× | 1.12× | 1.18× |
 
 It is a convenience for all-N searches, not a speed-up below about five revolutions. The external roadmap projected 1.26–1.50×.
+
+## C and Python interfaces (2026-11-26)
+
+`src/excali_c.f90` adds `bind(C)` entry points:
+- `excali_solve` and `excali_solve_plane` (dimensional, one case);
+- `excali_batch` (mu = 1);
+- `excali_batch_mu` (one mu for the batch);
+- `excali_c_data_address`, a diagnostic.
+
+They build into the shared library `excali_c`, declared in `include/excali.h`. The header started from `gfortran -fc-prototypes` and was edited by hand (`intptr_t`, `double (*)[3]`, comments). `python/excali.py` wraps the library with ctypes and NumPy.
+
+**Bit-identity.** `tests/test_excali_c.c` (CTest `excali_c_api`) calls each C entry point and the same routine directly from Fortran (`tests/excali_c_ref.f90`), on 600 deterministic cases:
+- zero-revolution and multi-revolution (m = 1–5, both branches, some infeasible);
+- extreme units (positions 1e±150, mu × 1e±100);
+- antipodal endpoints with and without a plane;
+- invalid inputs: tof ≤ 0, NaN, mu ≤ 0, direction 0, nrev < 0, branch 0, zero radius, same ray.
+
+Results:
+- Statuses: 531 × 0, 43 × 5, 24 × -1, 2 × -2.
+- Single cases and batches of 0, 1, 32 and 600 are identical: statuses, `half` and every velocity bit.
+- `excali_batch_mu` reproduces the scaled mu = 1 batch bit for bit, and agrees with per-case `excali_solve` to 9.9e-15 relative, with identical statuses.
+- Invalid mu gives -1 and NaN for every case.
+- Passes with `EXCALI_OPENMP` ON and OFF. The ON library links libgomp.
+
+**No copy.**
+- `excali_c_data_address` returns the caller's address for an element of `R1`.
+- The batch entries pass assumed-size arrays straight to `excali_batch`'s explicit-shape dummies (sequence association), so no temporaries exist.
+- In Python, the test checks that the address Fortran receives equals `array.ctypes.data`, that `out=` arrays are filled in place, and that float64/int32 C-contiguous inputs are not converted.
+
+**Python tests** (`python/test_excali.py`, 6 tests, pass against both builds):
+- bit-identical to the C library called directly;
+- batch vs per-case `solve` within 1e-12 relative, on 1,000 random 3-D cases including multi-revolution;
+- mu = 1 vs mu = 398600 scaling;
+- scalar broadcasting, invalid inputs and shape errors;
+- four threads calling 20,000-case batches concurrently: identical results.
+
+**MATLAB.** MATLAB R2026b, `build_solvers` then `test_excali_comparison` in the comparison repository, headless (`matlab -batch`): pass. That covers EXCALI's MEX routes, mixed truth 3004/3009 with 2 invalid, and 1- and 4-thread parity. MATLAB reaches EXCALI through that gateway; no separate EXCALI MEX was added.
+
+**Overhead** (Apple M1 Pro, gfortran 16, serial library, 100k zero-revolution cases with mu = 1, best of 7; machine shared with other jobs, so provisional):
+
+| | single (ns/case) | batch n=1 | n=32 | n=1,000 | n=100,000 |
+|---|---|---|---|---|---|
+| Fortran direct | 264 | 243 | 144 | 144 | 144 |
+| C entry | 265 | 244–254 | 144 | 144 | 144 |
+| Python (ctypes) | 5,600 | 19,000 | 755 | 156 | 145–190 |
+
+The C layer adds nothing measurable. Python's cost is per call, not per case: NumPy's address lookup alone is about 850 ns per array, and a batch call passes ten arrays. The `ndpointer` argument types were replaced by raw addresses with explicit checks, which took the per-call cost from 9.5 µs to 5.6 µs (single) and from 27 µs to 19 µs (batch of 1).
+
+Not done: a compiled extension module (nanobind or the C API) for lower per-call cost, and a separate EXCALI-only MEX gateway.

@@ -55,6 +55,37 @@ call excali_solve(r1, r2, tof, mu, direction, revolutions, branch, v1, v2, statu
 
 `half=-1/0/1` denotes degenerate/ordinary/near-collinear geometry. The dimensional API can solve exactly antipodal cases with a supplied plane; the comparison's C/MEX interface has no plane argument and reports those cases as unsupported.
 
+## C and Python interfaces
+
+The build also produces a shared library, `libexcali_c` (the solver plus `src/excali_c.f90`), declared in [`include/excali.h`](include/excali.h):
+
+```c
+#include "excali.h"
+double r1[3] = {7000, 0, 0}, r2[3] = {0, 7000, 0}, v1[3], v2[3];
+int status;
+excali_solve(r1, r2, tof, 398600.4418, 1, 0, -1, v1, v2, &status);      /* one case */
+excali_batch_mu(n, R1, R2, TOF, 398600.4418, DIR, NREV, BR, V1, V2, STATUS, HALF); /* double R1[n][3], ... */
+```
+
+- `excali_solve` / `excali_solve_plane`: one dimensional case (the Fortran `excali_solve`); the second takes the transfer-plane normal for exactly antipodal endpoints.
+- `excali_batch`: `n` cases with `mu = 1` (the Fortran `excali_batch`).
+- `excali_batch_mu`: `n` cases sharing one `mu`. It matches per-case `excali_solve` to rounding, with identical statuses. Extreme units, where `tof*sqrt(mu)` overflows, return -1; use `excali_solve` there.
+
+Arrays of 3-vectors are `double[n][3]`, which have the same bytes as the Fortran `(3,n)` arrays, so nothing is copied. Integer arguments are C `int`. With `EXCALI_OPENMP=ON` the library links OpenMP and `excali_batch` runs its blocks in parallel above 128 cases.
+
+Python, using ctypes and NumPy only (`python/excali.py`):
+
+```python
+import excali                      # finds ../build/libexcali_c.*, or set EXCALI_LIBRARY
+v1, v2, status = excali.solve(r1, r2, tof, mu=398600.4418)
+v1, v2, status, half = excali.batch(R1, R2, TOF, mu=398600.4418, direction=1, nrev=0, branch=-1)
+```
+
+- `R1` and `R2` are `(n, 3)` arrays and `TOF` is `(n,)`. Float64 C-contiguous inputs and int32 index arrays are passed without a copy, and `out=` fills existing arrays. Other dtypes or layouts are converted.
+- ctypes releases the GIL during the call, so threads can call concurrently.
+- Each call costs about 10–30 µs of Python overhead. Use batches: at 1,000 cases per call the per-case time is within about 10% of the Fortran batch.
+- Tests: `python -m pytest python` with `EXCALI_LIBRARY` pointing at the built library.
+
 ## Method
 
 The original EXCALI v1 uses a lookup-table guess in universal anomaly, an upper-half thin rectangle with eight Gauss–Legendre top nodes and one midpoint on each side, and a Newton correction. It is restricted to zero-revolution elliptic transfers.
