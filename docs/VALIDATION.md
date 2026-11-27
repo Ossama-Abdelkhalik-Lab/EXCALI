@@ -867,3 +867,44 @@ The sqrt index alone makes the odds ratio worse on the truth set; it helps only 
 
   The saving is the `asin`.
 - **ctest:** 4/4.
+
+## Shorter dependency chains outside rect_ratio (2026-11-27)
+
+An external roadmap (Gemini) argued that most single-solve time is outside `rect_ratio`.
+
+**The premise.** Measured by calling `rect_ratio` 1, 2 and 3 times per case: one rectangle costs 40 ns of a 178 ns zero-revolution solve on M1 (23%) and 70 of 272 ns on x86-64 (26%). So about three quarters of the time is elsewhere, roughly as claimed (80–88%).
+
+**Changes kept (this branch):**
+- Estrin trees for `sincos_half`, `shch` and `rotate`: shorter dependent chains, the same terms.
+- In `rect_ratio` case(0) (near-parabolic, X in [-1.1, 1.1]):
+  - a minimax [5/5] rational for F(X), replacing the 18-term series: 2.9e-17 in F and 1.1e-16 in F' over the window, against 1.9e-15 and 1.1e-13;
+  - a degree-7 polynomial for (1-cos v)/X in Estrin form, replacing the 9-term series.
+  
+  Coefficients from the roadmap, checked against exact series.
+- **Timing:**
+
+  | | M1 | x86-64 |
+  |---|---|---|
+  | Zero-rev, truth set, single | 239 → 230 ns | −2 ns |
+  | Multi-rev, truth set, single | 219 → 214 ns | −5 ns |
+  | Batch | ±2 ns | ±2 ns |
+
+- **Accuracy:** the truth sets are unchanged.
+  - One adversarial near-`t_min` case flips status 2 → 0, with a smaller error (1.5e-11 vs 4.0e-11).
+  - Cases above 10× the double-precision floor: 29 vs 28.
+
+**Tried and not kept:**
+
+| Change | M1 | x86-64 | Notes |
+|---|---|---|---|
+| Division-free `rcbrt` (magic constant, order-4 corrections) | multi-rev +13 ns single | −3 ns | 1.7e-5 / 2.7e-16, more accurate than the current fine step |
+| Removing `sqrt(1)` and `1/1` in `geometry` and `velocities` | within noise | within noise | |
+| Minimax with the parabolic window raised to 0.9 / 0.95 | within noise | within noise | 22–23 cases above 10× the floor vs 28 |
+| Montgomery batch inversion of 1/sin v | +10 to +23 ns | +9 to +22 ns | |
+| Kind-bucketed SoA `rect_ratio` in `solve_chunk` (vectorized across cases) | batch +6 to +9 ns | batch +8 ns | also +9 with `-march=native` (AVX2) |
+| GLL-10 | +2 ns | +3 ns | no accuracy gain |
+| GLL-8 | −2 to −5 ns | −5 to −9 ns | loses 2 digits on hyperbolas at R/4; roots leave the rectangle at R/8 |
+
+On x86-64, `-march=native` made `main` itself 6 ns slower.
+
+ctest 4/4.
