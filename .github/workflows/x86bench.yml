@@ -1,0 +1,93 @@
+# Experiment only (Gemini roadmap review): x86-64 timing of solver variants
+# and alternative compilers. Runs on pushes to this branch.
+name: x86bench
+on:
+  push:
+    branches: [roadmap-x86-bench]
+  workflow_dispatch:
+
+jobs:
+  timing:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - name: Machine
+        run: |
+          sudo apt-get update -qq && sudo apt-get install -y -qq gfortran
+          gfortran --version | head -1; nproc; lscpu | grep -E "Model name|Flags" | cut -c1-400
+          lscpu | grep -o -E "avx512[a-z_]*|avx2|fma" | sort -u | tr '\n' ' '; echo
+      - name: Baseline flags (portable x86-64)
+        run: ROUNDS=3 ./bench/run.sh | tee base.csv
+      - name: -march=native (subset)
+        run: VARIANTS="main w2_soa w2_all gll8 gll10 mont harm_sqrt" TAG=native FLAGS="-O3 -march=native -ffree-line-length-none -fno-fast-math" ROUNDS=3 ./bench/run.sh | tee native.csv
+      - name: solve_all vs loop
+        run: |
+          o=bench/out/sa; mkdir -p $o
+          gfortran -O3 -ffree-line-length-none -fno-fast-math -J $o -I bench/variants/solveall -c bench/variants/solveall/excali_solver.f90 -o $o/ex.o
+          gfortran -O3 -I $o bench/tsa.f90 $o/ex.o -o $o/tsa && $o/tsa | tee solveall.txt
+      - name: Summary
+        run: |
+          python3 - <<'PY' >> "$GITHUB_STEP_SUMMARY"
+          import csv,collections
+          for f in ['base.csv','native.csv']:
+              d=collections.defaultdict(list)
+              for r in csv.reader(open(f)):
+                  if len(r)<7: continue
+                  d[(r[2],r[4])].append((float(r[5]),float(r[6])))
+              print(f'### {f} (best of rounds, ns per case)\n\n| variant | set | single | batch |\n|---|---|---:|---:|')
+              for (v,s),xs in sorted(d.items()):
+                  print(f'| {v} | {s} | {min(x[0] for x in xs):.1f} | {min(x[1] for x in xs):.1f} |')
+              print()
+          print('### solve_all\n\n```'); print(open('solveall.txt').read()); print('```')
+          PY
+      - uses: actions/upload-artifact@v4
+        with:
+          name: x86bench
+          path: |
+            base.csv
+            native.csv
+            solveall.txt
+
+  flang:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - name: Install flang
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq flang-18 cmake || sudo apt-get install -y -qq flang-17 cmake
+          FC=$(ls /usr/bin/flang-new-1* /usr/bin/flang-1* 2>/dev/null | head -1); echo "FC=$FC" >> $GITHUB_ENV; $FC --version | head -2
+      - name: Build and test (CMake)
+        run: |
+          cmake -S . -B build -DCMAKE_BUILD_TYPE=Release -DCMAKE_Fortran_COMPILER=$FC -DEXCALI_OPENMP=OFF
+          cmake --build build -j
+          ctest --test-dir build --output-on-failure
+      - name: Timing (main, flang vs gfortran)
+        run: |
+          sudo apt-get install -y -qq gfortran
+          VARIANTS=main TAG=flang FC=$FC FLAGS="-O3 -ffree-form" ROUNDS=3 ./bench/run.sh | tee flang.csv
+          VARIANTS=main TAG=gfortran FC=gfortran ROUNDS=3 ./bench/run.sh | tee gfortran.csv
+
+  ifx:
+    runs-on: ubuntu-latest
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v5
+      - name: Install oneAPI ifx
+        run: |
+          wget -qO- https://apt.repos.intel.com/intel-gpg-keys/GPG-PUB-KEY-INTEL-SW-PRODUCTS.PUB | gpg --dearmor | sudo tee /usr/share/keyrings/oneapi-archive-keyring.gpg > /dev/null
+          echo "deb [signed-by=/usr/share/keyrings/oneapi-archive-keyring.gpg] https://apt.repos.intel.com/oneapi all main" | sudo tee /etc/apt/sources.list.d/oneAPI.list
+          sudo apt-get update -qq && sudo apt-get install -y -qq intel-oneapi-compiler-fortran cmake
+          source /opt/intel/oneapi/setvars.sh && ifx --version | head -1
+      - name: Build and test (CMake)
+        run: |
+          source /opt/intel/oneapi/setvars.sh
+          cmake -S . -B build -DCMAKE_BUILD_TYPE=Release -DCMAKE_Fortran_COMPILER=ifx -DEXCALI_OPENMP=OFF
+          cmake --build build -j
+          ctest --test-dir build --output-on-failure
+      - name: Timing (main, ifx precise vs gfortran)
+        run: |
+          source /opt/intel/oneapi/setvars.sh
+          sudo apt-get install -y -qq gfortran
+          VARIANTS=main TAG=ifx FC=ifx FLAGS="-O3 -fp-model=precise" ROUNDS=3 ./bench/run.sh | tee ifx.csv
+          VARIANTS=main TAG=gfortran FC=gfortran ROUNDS=3 ./bench/run.sh | tee gfortran.csv
