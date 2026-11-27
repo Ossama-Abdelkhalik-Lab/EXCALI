@@ -1140,8 +1140,8 @@ contains
    ! Multi-revolution table starter: tau and the semiperimeter sl, time t,
    ! revolutions m and branch br. stat=5: t is below the tabulated minimum
    ! time by more than the table error (infeasible); stat=1: v is the branch
-   ! root, within 2.5% of its distance to v* (or to the pole), from the
-   ! normalized table v = v* + sigma*(P-v*)*q; stat=2: near the fold
+   ! root, within 4.1% of min(|v-v*|, pole distance), from the normalized
+   ! table w = ((1-f)/f)*(|sigma|/(1-|sigma|)), f = (v-v*)/(P-v*); stat=2: near the fold
    ! (|sigma| < 1e-2, or within the table's t_min margin), vs is v* within
    ! 6e-5 of min(v*,pi-v*) for mrev_fold; stat=0: outside the tables. Slices
    ! in mu=1/m by 4-point Lagrange.
@@ -1202,10 +1202,12 @@ contains
                +wt(3)*mr_q(i+3,j+jb,h,km(k))+wt(4)*mr_q(i+4,j+jb,h,km(k)))
          enddo
       enddo
-      ! The table holds g=(q-1)/(1-sig); the pole distance
-      ! (1-sig)*(1-sig*g)*|P-v*|, 1-sig = r/(1+sig), keeps full precision as
-      ! t -> infinity. The root comes back in v (kx=1), or in pi-v near pi (kx=2).
-      dpl=r/(1+sig)*(1-sig*v)*merge(pi-vs,vs,br>0)
+      ! The table holds the odds ratio w = ((1-f)/f)*(sig/(1-sig)); with
+      ! 1-sig = r/(1+sig) the pole distance (1-f)*|P-v*| = r*w/(r*w+sig*(1+sig))*|P-v*|
+      ! is free of cancellation and keeps full precision as t -> infinity (a
+      ! relative error e in w is a relative error of at most e in both v-v*
+      ! and the pole distance). The root comes back in v (kx=1), or in pi-v near pi (kx=2).
+      dpl=r*v/(r*v+sig*(1+sig))*merge(pi-vs,vs,br>0)
       kx=1
       if(br<0)then
          v=dpl
