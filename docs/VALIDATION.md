@@ -769,3 +769,48 @@ The audit above found two `mrev_edge` boundaries near one edge of their working 
 The earlier half-value failure of `Delta` was its long-way part. The short-way value stays: raising it adds status-2 flags (ms7: 6613 at 0.003, 6690 at 0.1), and lowering it raises the max error slightly (7.4e-12). New values sit at the log-middle of their ranges.
 
 Combined: the same max errors in every band, no ms4d feasibility disagreements, velocities within 4e-12 of the previous version, ms6 status-2 count unchanged and ms7 +12 of 40k. Truth suites identical; ctest 3/3.
+
+## Multi-revolution table near tau = -0.9: odds-ratio storage (2026-11-26)
+
+**The fault.** An external review of the solver suggested that the multi-revolution table starter could put the root outside the rectangle. Measured against a quad-precision root of the time equation in the solver's own coordinate:
+- **Where:** `m = 1-3`, branch +1, `tau` between -0.898 and -0.845. On the long way that needs `r1 ~ r2`; with r2/r1 = 0.6 or 0.25, `tau` never gets there.
+- **Starter error:** up to 23% of the bound (the 2026-11-09 audit found 8%; the code comment said 2.5%).
+- **Effect:** with the half-width floored into (R/16, R/8], the root fell up to 1.79 half-widths outside the rectangle. Root errors reached 3e-8, and 34 of 41 such cases in one sweep returned status 0. Status 2 caught only 6.
+- **Frequency:** 1 in 94k random long-way cases with `tau` in [-0.9, -0.6]. No truth set reached it.
+
+**The cause.** On the pole side near `tau = -0.9` the root sits in a thin layer at pi: `pi - v` falls to 6e-4 while `|sigma|` is only 0.2-0.95. The table stored `g = (q - 1)/(1 - |sigma|)`, and the pole distance `(1 - |sigma|)(1 - |sigma| g)|P - v*|` cancels there (`|sigma| g` up to 0.92). That amplified the interpolation error of `g` about 12 times. A second contributor: the `sigma` transition into the layer, near 0.1-0.2, fell between grid points.
+
+**The change.** `mr_q` now stores the odds ratio `w = ((1-f)/f)·(|sigma|/(1-|sigma|))`, `f = (v - v*)/(P - v*)`, on 16 points in `sqrt|sigma|` (was 12).
+- The pole distance is `r w/(r w + |sigma|(1+|sigma|))·|P - v*|`, with no cancellation and one division.
+- A relative error in `w` is at most the same relative error in both `v - v*` and the pole distance.
+
+**Alternatives measured offline** (8,000 random cases per slice, half in `tau < -0.8`; worst error relative to `min(|v - v*|, pole distance)`, `m = 1, 2, 3, 8`, both branches):
+
+| stored | 16 × 12 | 16 × 16 | 20 × 16 | 24 × 16 |
+|---|---|---|---|---|
+| `g` (before) | 18.8% | 9.3% | | |
+| `log w` | 10.8% | 2.2% | 2.1% | 2.1% |
+| `w` | | 4.1% | | |
+| `1/w` | | 5.6% | | |
+
+**Why `w` rather than `log w`.** `log w` is the most accurate, but its `exp` cost 19 ns per multi-revolution single solve. A polynomial `exp` from the exponent bits still cost 18 ns: the dependent chain is the cost, not the libm call. `w` stays within the budget: L ≥ R/16 keeps the root inside the rectangle while the error is below 6.25%.
+
+**Results.**
+
+| | before | after |
+|---|---|---|
+| Worst starter error, 720k-case map (`tau` in [-0.9, 0.9]; r2/r1 = 1, 0.6, 0.25; `m = 1-3`; both branches; `t/t0` up to 1e3) | 23.3% of the bound | 3.6% |
+| Roots outside the rectangle, same map | 124 | 0 |
+| Cases above 10× the double-precision floor, same map | 121 | 0 |
+| Largest alpha on the stress sets (sweep at `theta = 359.22 deg`; random band; 200k random long-way) | 1.79 | 0.31 |
+| Worst error on the stress sets | 3e-8 | within 5.2× the floor |
+
+- **Truth sets** (zero_rev, multirev, adversarial, sweeps, harness_mixed, infeasible, dev): identical statuses and paths; errors equal or slightly lower. Zero-revolution results are bit-identical.
+- **Size:** `mr_q` grows from 4,224 to 5,632 values (+5.6 KB).
+- **Timing** (interleaved, best of 9, Apple M1): multi-revolution single 219 → 222 ns, batch 178 → 179; zero-revolution unchanged.
+- **ctest:** 4/4.
+- **Linux x86-64** (Docker gcc:14, emulated):
+  - ctest 4/4.
+  - multirev and adversarial: statuses identical to the previous build.
+  - The `theta = 359.22 deg` sweep: 41 roots outside before, none after; max 5.0× the floor.
+  - Two adversarial cases (752, 778; category 10, near `t_min`) return -4 on x86-64 in both builds, and status 2 on macOS. They are exact node hits: without FMA contraction `T - t` rounds to 0 at node 2 and node 1 of the final rectangle. A non-finite-node guard solves both (errors 2.3e-9 and 1.5e-9, about twice the floor). Separate change.

@@ -27,19 +27,25 @@ interpolated in mu at run time, |tau| <= TM:
   location) on a fine tau grid of MR_NC points;
   mr_q(:,:,h,k) = branch root normalized by its two anchors on tau x |sigma|,
   sigma = branch*sqrt(1-(t_min/t)**(1/3)), one half per branch (h=1: sigma<0,
-  h=2: sigma>0): q = (v - v*)/(|sigma|*(P - v*)), P = 0 or pi the pole on the
-  branch's side. q is smooth on each half, tends to sqrt(6 t_min/T''(v*))/|P-v*|
-  at the fold and to 1 at the pole, where v = v* + |sigma|*(P-v*)*q hits P exactly
-  whatever the error of the interpolated v*. The table stores
-  g = (q - 1)/(1 - |sigma|), finite at the pole, so the pole distance
-  (1 - |sigma| q)|P - v*| = (1-|sigma|)(1 - |sigma| g)|P - v*| with
-  1 - |sigma| = r/(1+|sigma|), r = (t_min/t)**(1/3), keeps full precision as
-  t -> infinity (storing q itself leaves a 1e-9 offset at the pole). Its grid
-  is 16 tau points clustered toward |tau| = TM (tau = TM*sin(1.45x)/sin(1.45),
-  x uniform) by 12 points uniform in sqrt|sigma|: within 1.4% of |v - v*| (or
-  the pole distance) for |sigma| >= 1e-2 in 4,000 random cases, where the
-  uniform 32 x 16 grid it replaced reached 2.8% (the old 16x16 table of v
-  itself was off by up to 8 times |v - v*| near the fold). mr_c decides
+  h=2: sigma>0): f = (v - v*)/(P - v*), the fraction of the way from v* to P
+  = 0 or pi, the pole on the branch's side. The table stores the odds ratio
+  w = ((1-f)/f) / ((1-|sigma|)/|sigma|), finite and positive at both ends
+  (f ~ |sigma|*sqrt(6 t_min/T''(v*))/|P-v*| at the fold, 1 - f ~ (1-|sigma|)*c
+  at the pole). Both distances come from it without cancellation: with
+  1 - |sigma| = r/(1+|sigma|), r = (t_min/t)**(1/3), the pole distance is
+  (1-f)|P - v*| = r*w/(r*w + |sigma|*(1+|sigma|))*|P - v*|, which keeps full
+  precision as t -> infinity, and v hits P exactly whatever the error of the
+  interpolated v*; a relative error e in w is a relative error of at most e
+  in both v - v* and the pole distance. Its grid is 16 tau points clustered
+  toward |tau| = TM (tau = TM*sin(1.45x)/sin(1.45), x uniform) by 16 points
+  uniform in sqrt|sigma|: within 4.1% of min(|v - v*|, pole distance) for
+  |sigma| >= 1e-2 (8,000 random cases per slice, half of them in tau < -0.8).
+  The table it replaced stored g = (q - 1)/(1 - |sigma|), q = f/|sigma|, on
+  12 sigma points; toward tau = -0.9 on the pole side (m = 1, 2) the root
+  sits in a thin layer at pi, where 1 - |sigma| g cancels and the pole
+  distance was off by up to 23%. The sigma transition into the layer, near
+  0.1-0.2, needs the 16 points (12 leave 5.7-10%). log(w) interpolates to
+  2.3% but its exp costs 15 ns per multi-revolution solve. mr_c decides
 feasibility outside a 1e-6 margin, so it needs MR_NC >= 128 and the m = 5
 slice (worst relative error 1.04e-7 for m = 1..40 and sampled m to 1000,
 including m between slices; 4.4e-7 at m = 5 when that slice is left out).
@@ -145,7 +151,7 @@ def hyperbolic(n):
     return out
 
 
-MR_M = [1, 2, 3, 4, 5, 6, 8, 12, 16, 32, 1000000]; MR_NT = 16; MR_NS = 12; MR_NC = 128
+MR_M = [1, 2, 3, 4, 5, 6, 8, 12, 16, 32, 1000000]; MR_NT = 16; MR_NS = 16; MR_NC = 128
 MR_TC = 1.45      # mr_q tau grid: tau = TM*sin(MR_TC*x)/sin(MR_TC), x uniform in [-1,1]
 
 
@@ -185,7 +191,8 @@ def multi_rev(n):
             S = br * np.clip(sg, 1e-7, 1 - 1e-9)
             L, SS = np.meshgrid(lg, S, indexing='ij')
             P = np.pi if br > 0 else 0.0
-            V[:, :, h, k] = ((branch_v(L, SS, m) - vg[:, None]) / (np.abs(SS) * (P - vg[:, None])) - 1) / (1 - np.abs(SS))
+            f = (branch_v(L, SS, m) - vg[:, None]) / (P - vg[:, None]); a = np.abs(SS)
+            V[:, :, h, k] = ((1 - f) / f) * (a / (1 - a))
         tm, vs = tmin_v(lc, m)
         # T scales as s_L**1.5 (canonical s_L = 2/(1+lam**2)).
         C[:, k] = np.cbrt(tm / m) / np.sqrt(2 / (1 + lc * lc)); VS[:, k] = vs
@@ -390,7 +397,8 @@ def write(out, n, EA, EB, LB, HS, HL, V, C, VS, BA, BB, BC):
         f.write(f"   integer,parameter::tab_n={n}\n   real(dp),parameter::tab_tmax={TM}_dp\n")
         f.write(f"   real(dp),parameter::tabh_s1={np.sqrt(TOP):.17e}_dp,tabh_u0={UH}_dp\n")
         block(f, "tabh", (HS, HL))
-        f.write(f"   ! Multiple revolutions (slices in mu = 1/m, last ~infinity): mr_q(tau,|sigma|,branch,k) = ((v-v*)/(|sigma|*(P-v*)) - 1)/(1-|sigma|),\n")
+        f.write(f"   ! Multiple revolutions (slices in mu = 1/m, last ~infinity): mr_q(tau,|sigma|,branch,k) = ((1-f)/f)*(|sigma|/(1-|sigma|)),\n")
+        f.write("   ! f = (v-v*)/(P-v*), P = 0 (sigma<0) or pi (sigma>0);\n")
         f.write(f"   ! mr_c(tau,k) = cbrt(t_min/m)/sqrt(s_L), mr_s(tau,k) = v*; |tau| <= {TM}.\n")
         f.write(f"   integer,parameter::mr_nt={V.shape[0]},mr_ns={V.shape[1]},mr_nm={len(MR_M)},mr_nc={MR_NC}\n")
         f.write(f"   ! mr_q grid: tau = {TM}*sin(mr_tc*x)/sin(mr_tc), x uniform in [-1,1]; |sigma| = (j/(mr_ns-1))**2.\n")
