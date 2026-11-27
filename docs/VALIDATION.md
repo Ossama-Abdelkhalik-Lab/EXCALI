@@ -837,3 +837,33 @@ Without contraction (`-ffp-contract=off`, as in a baseline x86-64 build), one do
 | Timing | unchanged within noise | (emulated, not timed) |
 
 Status now differs by platform for these cases (status 2 on macOS through the rectangle's error estimate), as it already did for other near-`t_min` cases.
+
+## Multi-revolution table: harmonic anchor and sqrt index (2026-11-27)
+
+**Change.** Two parts, both proposed in an external roadmap (Gemini, "HarmRat p=2" and the `sqrt(1-|tau|)` index):
+- **Storage:** `mr_q` now stores the pole distance divided by a harmonic anchor, `d_ref = r/(1+|sigma|)*span/(1 - |sigma| + sigma**2*beta)`, with `beta = span*c_m*(1+tau**2)/(2*C_PI*(1+br*tau)**2)` and `C_PI = (pi/sqrt2)**(1/3)`. It replaces the odds ratio from #21.
+- **Index:** the table's tau index is uniform in `sign(tau)*(1-sqrt(1-|tau|))`, which replaces the `asin` clustering.
+
+The anchor follows the root from the fold into the thin layer at pi, so the stored ratio is smooth and needs no `exp`. The roadmap's printed `C_PI` (1.3048032993452589) is wrong in the 7th digit; the exact value comes from the table generator.
+
+**Measured** against the quad-precision harness (root in the solver's coordinate):
+
+| | odds ratio, asin (main) | odds ratio, sqrt index | harmonic, asin | harmonic, sqrt index (this) |
+|---|---|---|---|---|
+| Worst starter error, 720k-case map | 3.6% | 3.3% | 2.4% | **2.1%** |
+| Largest alpha, mcliff / mband / mstress2 | 0.26 / 0.31 / 0.20 | 0.32 / 0.33 / 0.18 | 0.24 / 0.18 / 0.08 | 0.25 / 0.23 / 0.07 |
+| Largest alpha, multirev truth set | 0.033 | 0.161 | 0.036 | 0.025 |
+
+The sqrt index alone makes the odds ratio worse on the truth set; it helps only with the anchor.
+
+- **Statuses and paths:** identical on every set, including adversarial and infeasible; zero-revolution results are untouched.
+- **Accuracy:** errors at most 5.0× the floor on the stress sets.
+- **Timing:**
+
+  | | M1, interleaved best of 9 | x86-64 (GitHub runner, EPYC 7763) |
+  |---|---|---|
+  | Multi-revolution single | 219 → 212 ns (truth set), 186 → 178 ns (generated cases) | −4.9 ns |
+  | Multi-revolution batch | unchanged | −2.4 ns |
+
+  The saving is the `asin`.
+- **ctest:** 4/4.
