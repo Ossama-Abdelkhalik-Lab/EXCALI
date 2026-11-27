@@ -716,6 +716,11 @@ contains
       real(dp),intent(in)::c,hs,hc,y0,yend,a,b,t
       real(dp),intent(out)::dd,de
       real(dp),dimension(n1+2)::uu,wq,ct,st,f,f1
+      real(dp)::pn,pd,dpn,dpd,rpd,x2
+      ! Minimax [5/5] for F(X) on [-1.1,1.1] (Gemini roadmap Table 4).
+      real(dp),parameter::mp5(6)=[0.471404520791031683_dp,-0.0321640242347062538_dp,0.00080117306687564781_dp,0.0000357838334052750178_dp,5.31865871099285411e-7_dp,3.67004869502974691e-9_dp]
+      real(dp),parameter::mq5(6)=[1.0_dp,-0.368230198939827738_dp,0.0514543186931379932_dp,-0.00336069598425015961_dp,0.000101464461359092333_dp,-1.17095164868179883e-6_dp]
+      real(dp),parameter::c7(8)=[0.5_dp,-0.0416666666666666667_dp,0.00138888888888895807_dp,-0.0000248015873015874836_dp,2.75573191954004349e-7_dp,-2.08767569803456397e-9_dp,1.14711235861204717e-11_dp,-4.77957680272280121e-14_dp]
       real(dp)::el,q0,q1,q2,r0,r1,r2,fa,fb,x,sh,ch,sn,cn,rs,yv,y1,ff,ff1,q,g,g1,ser,ser1,pk,y00,ab,mt,sb,cb
       integer::np,j,n
       logical::lw,us
@@ -733,15 +738,15 @@ contains
       case(0)
          do j=1,np
             x=c+el*uu(j)
-            ser=cser(1);ser1=0
-            do n=2,9
-               ser1=ser1*x+ser;ser=ser*x+cser(n)
-            enddo
+            x2=x*x
+            ser=((c7(1)+x*c7(2))+x2*(c7(3)+x*c7(4)))+x2*x2*((c7(5)+x*c7(6))+x2*(c7(7)+x*c7(8)))
+            ser1=((c7(2)+x*2*c7(3))+x2*(3*c7(4)+x*4*c7(5)))+x2*x2*((5*c7(6)+x*6*c7(7))+x2*7*c7(8))
             yv=y0+b*x*ser;y1=b*(ser+x*ser1)
-            ff=pser2(1);ff1=0
-            do n=2,np_ser
-               ff1=ff1*x+ff;ff=ff*x+pser2(n)
-            enddo
+            pn=((((mp5(6)*x+mp5(5))*x+mp5(4))*x+mp5(3))*x+mp5(2))*x+mp5(1)
+            pd=((((mq5(6)*x+mq5(5))*x+mq5(4))*x+mq5(3))*x+mq5(2))*x+1
+            dpn=(((5*mp5(6)*x+4*mp5(5))*x+3*mp5(4))*x+2*mp5(3))*x+mp5(2)
+            dpd=(((5*mq5(6)*x+4*mq5(5))*x+3*mq5(4))*x+2*mq5(3))*x+mq5(2)
+            rpd=1/pd;ff=pn*rpd;ff1=(dpn-ff*dpd)*rpd
             q=sqrt(yv);g=yv*ff+a
             f(j)=1/(q*g-t)
             f1(j)=-(.5_dp*y1/q*g+q*(y1*ff+yv*ff1))*f(j)**2
@@ -848,12 +853,13 @@ contains
       integer,intent(in)::kind1
       real(dp),intent(in)::x,h
       real(dp),intent(inout)::hs,hc
-      real(dp)::s,c,q,r
+      real(dp)::s,c,q,r,e2,e4
       if(kind1==0)return
       if(abs(h)<.25_dp)then
          q=h*h;if(kind1>0)q=-q
-         s=h*(1+q*(rf(3)+q*(rf(5)+q*(rf(7)+q*(rf(9)+q*(rf(11)+q*rf(13)))))))
-         c=1+q*(rf(2)+q*(rf(4)+q*(rf(6)+q*(rf(8)+q*(rf(10)+q*(rf(12)+q*rf(14)))))))
+         e2=q*q;e4=e2*e2
+         s=h*(1+q*(((rf(3)+q*rf(5))+e2*(rf(7)+q*rf(9)))+e4*(rf(11)+q*rf(13))))
+         c=1+q*(((rf(2)+q*rf(4))+e2*(rf(6)+q*rf(8)))+e4*((rf(10)+q*rf(12))+e2*rf(14)))
       elseif(kind1>0)then
          s=sin(h);c=cos(h)
       else
@@ -933,11 +939,12 @@ contains
    elemental subroutine shch(x,s,c)
       real(dp),intent(in)::x
       real(dp),intent(out)::s,c
-      real(dp)::q,e
+      real(dp)::q,e,w
       if(abs(x)<.5_dp)then
          q=x*x
-         s=x*(1+q*(rf(3)+q*(rf(5)+q*(rf(7)+q*(rf(9)+q*(rf(11)+q*rf(13)))))))
-         c=1+q*(rf(2)+q*(rf(4)+q*(rf(6)+q*(rf(8)+q*(rf(10)+q*(rf(12)+q*rf(14)))))))
+         e=q*q;w=e*e
+         s=x*(1+q*(((rf(3)+q*rf(5))+e*(rf(7)+q*rf(9)))+w*(rf(11)+q*rf(13))))
+         c=1+q*(((rf(2)+q*rf(4))+e*(rf(6)+q*rf(8)))+w*((rf(10)+q*rf(12))+e*rf(14)))
       elseif(abs(x)<700)then
          e=exp(x);q=1/e
          s=(e-q)/2;c=(e+q)/2
@@ -953,15 +960,16 @@ contains
       real(dp),intent(in)::c
       real(dp),intent(out)::s,co
       real(dp),parameter::pio2_hi=1.5707963267948966_dp,pio2_lo=6.123233995736766e-17_dp
-      real(dp)::y,z,ps,pc
+      real(dp)::y,z,ps,pc,w,v
       if(.not.(c>=0.and.c<=pi))then
          s=sin(c/2);co=cos(c/2);return
       endif
       y=c/2
       if(y>pio2_hi/2)y=(pio2_hi-y)+pio2_lo
       z=y*y
-      ps=y+y*z*(-rf(3)+z*(rf(5)+z*(-rf(7)+z*(rf(9)+z*(-rf(11)+z*(rf(13)-z*rf(15)))))))
-      pc=1+z*(-rf(2)+z*(rf(4)+z*(-rf(6)+z*(rf(8)+z*(-rf(10)+z*(rf(12)+z*(-rf(14)+z*rf(16))))))))
+      w=z*z;v=w*w
+      ps=y+y*z*(((-rf(3)+z*rf(5))+w*(-rf(7)+z*rf(9)))+v*((-rf(11)+z*rf(13))-w*rf(15)))
+      pc=1+z*(((-rf(2)+z*rf(4))+w*(-rf(6)+z*rf(8)))+v*((-rf(10)+z*rf(12))+w*(-rf(14)+z*rf(16))))
       if(c/2>pio2_hi/2)then
          s=pc;co=ps
       else
