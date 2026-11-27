@@ -2,13 +2,13 @@
 # Build every variant with the given compiler and flags, then time them in
 # interleaved rounds on generated cases. Output: CSV lines
 # compiler,flags,variant,round,set,single_ns,batch_ns
-FC=${FC:-gfortran}; TAG=${TAG:-base}; FLAGS=${FLAGS:-"-O3 -ffree-line-length-none -fno-fast-math"}
+MODFLAG=${MODFLAG:--J}; FC=${FC:-gfortran}; TAG=${TAG:-base}; FLAGS=${FLAGS:-"-O3 -ffree-line-length-none -fno-fast-math"}
 VARIANTS=${VARIANTS:-$(ls bench/variants)}
 ROUNDS=${ROUNDS:-3}
 out=bench/out/$TAG; mkdir -p $out
 for v in $VARIANTS; do
   d=bench/variants/$v; o=$out/obj_$v; mkdir -p $o
-  if $FC $FLAGS -J $o -I $d -c $d/excali_solver.f90 -o $o/ex.o 2> $o/build.log && \
+  if $FC $FLAGS $MODFLAG $o -I $d -c $d/excali_solver.f90 -o $o/ex.o 2> $o/build.log && \
      $FC $FLAGS -I $o bench/tgen.f90 $o/ex.o -o $out/tg_$v 2>> $o/build.log; then :; else echo "BUILD FAILED $v"; cat $o/build.log | head -5; fi
 done
 for r in $(seq 1 $ROUNDS); do

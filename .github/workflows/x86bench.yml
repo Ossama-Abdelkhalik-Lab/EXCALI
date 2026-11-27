@@ -8,6 +8,7 @@ on:
 
 jobs:
   timing:
+    if: false
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v5
@@ -57,15 +58,15 @@ jobs:
           sudo apt-get update -qq
           sudo apt-get install -y -qq flang-18 cmake || sudo apt-get install -y -qq flang-17 cmake
           FC=$(ls /usr/bin/flang-new-1* /usr/bin/flang-1* 2>/dev/null | head -1); echo "FC=$FC" >> $GITHUB_ENV; $FC --version | head -2
-      - name: Build and test (CMake)
+      - name: Build and run the standalone truth test (no CMake; it requires GNU)
         run: |
-          cmake -S . -B build -DCMAKE_BUILD_TYPE=Release -DCMAKE_Fortran_COMPILER=$FC -DEXCALI_OPENMP=OFF
-          cmake --build build -j
-          ctest --test-dir build --output-on-failure
+          mkdir -p fb && cd fb
+          $FC -O3 -c ../src/excali_solver.f90 -I../src -o excali_solver.o
+          $FC -O3 ../tests/test_excali_standalone.f90 excali_solver.o -o test_excali && ./test_excali
       - name: Timing (main, flang vs gfortran)
         run: |
           sudo apt-get install -y -qq gfortran
-          VARIANTS=main TAG=flang FC=$FC FLAGS="-O3 -ffree-form" ROUNDS=3 ./bench/run.sh | tee flang.csv
+          VARIANTS=main TAG=flang FC=$FC FLAGS="-O3" ROUNDS=3 ./bench/run.sh | tee flang.csv
           VARIANTS=main TAG=gfortran FC=gfortran ROUNDS=3 ./bench/run.sh | tee gfortran.csv
 
   ifx:
@@ -79,15 +80,15 @@ jobs:
           echo "deb [signed-by=/usr/share/keyrings/oneapi-archive-keyring.gpg] https://apt.repos.intel.com/oneapi all main" | sudo tee /etc/apt/sources.list.d/oneAPI.list
           sudo apt-get update -qq && sudo apt-get install -y -qq intel-oneapi-compiler-fortran cmake
           source /opt/intel/oneapi/setvars.sh && ifx --version | head -1
-      - name: Build and test (CMake)
+      - name: Build and run the standalone truth test (no CMake; it requires GNU)
         run: |
           source /opt/intel/oneapi/setvars.sh
-          cmake -S . -B build -DCMAKE_BUILD_TYPE=Release -DCMAKE_Fortran_COMPILER=ifx -DEXCALI_OPENMP=OFF
-          cmake --build build -j
-          ctest --test-dir build --output-on-failure
+          mkdir -p fb && cd fb
+          ifx -O3 -fp-model=precise -c ../src/excali_solver.f90 -I../src -o excali_solver.o
+          ifx -O3 -fp-model=precise ../tests/test_excali_standalone.f90 excali_solver.o -o test_excali && ./test_excali
       - name: Timing (main, ifx precise vs gfortran)
         run: |
           source /opt/intel/oneapi/setvars.sh
           sudo apt-get install -y -qq gfortran
-          VARIANTS=main TAG=ifx FC=ifx FLAGS="-O3 -fp-model=precise" ROUNDS=3 ./bench/run.sh | tee ifx.csv
+          VARIANTS=main TAG=ifx FC=ifx MODFLAG=-module FLAGS="-O3 -fp-model=precise" ROUNDS=3 ./bench/run.sh | tee ifx.csv
           VARIANTS=main TAG=gfortran FC=gfortran ROUNDS=3 ./bench/run.sh | tee gfortran.csv
