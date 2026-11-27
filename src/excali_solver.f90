@@ -12,7 +12,7 @@ module excali_solver
    use iso_c_binding, only: c_double
    implicit none
    private
-   public :: excali_one, excali_solve, excali_batch
+   public :: excali_one, excali_solve, excali_batch, excali_solve_all
    integer,parameter :: dp=real64
    real(dp),parameter :: pi=acos(-1.0_dp),sqrt2=sqrt(2.0_dp),rsqrt2=1/sqrt2
    ! The bit-pattern helpers (pow2m, kexp, rlog, rcbrt) assume IEEE-754
@@ -128,64 +128,69 @@ contains
    if(abs(direction)/=1.or.m<0.or.abs(br)/=1.or..not.(tof>0).or..not.ieee_is_finite(tof))return
    call geometry(r1,r2,tof,direction,g,status,half,plane_normal)
    if(status/=-4)return
-   fast=.false.;near=.false.;fin=.false.;rb=0;kr=0;lb=0;ub=pi;hs=0;hc=1;dd=0;de=0;wb=0
-   if(m>0)then
-      ! Multiple revolutions: the cheap bound, the tables, the fold.
-      chord=sqrt((g%rn1-g%rn2)**2+4*g%rn1*g%rn2*g%ss**2);semi=(g%rn1+g%rn2+chord)/2
-      status=5
-      if(g%t>=m*pi*semi*sqrt(semi)/sqrt2*(1-1e-12_dp)) &
-         call mrev_table(g%a/(sqrt2*semi)/(1+sqrt(chord/semi)),semi,g%t,m,br,x,k,vs,status)
-      if(status==2)then
-         call mrev_fold(g,m,br,vs,x,status);k=1
-      endif
-      fast=status==1
-      if(status==3)then
-         status=1;x=vs                             ! t = t_min: the root is v* itself
-      elseif(status/=5)then
-         status=-4
-      endif
-      if(status==5)return
-      if(br<0)then
-         ub=vs
-      else
-         lb=vs
-      endif
-      if(k==1.and.x>.75_dp*pi)then
-         x=pi-x;k=2
-      endif
-      if(k==2)then                                 ! distance from the upper pole
-         el=lb;lb=pi-ub;ub=pi-el
-      endif
-      if(status==1)call sincos_half(x,hs,hc)
-   else
-      call zero_rev_start(g,k,x,wb,fin,near)
-      fast=x>0.or.k==0
-   endif
-   if(fast.and.k/=0)then
-      call fast_coordinate(k,x,m,g%y0,g%b,wb,lb,ub,kd,c,el,rb,hs,hc)
-      fast=el>0;kr=kexp(el)
-      if(fast.and..not.fin)call rect_ratio(kd,c,hs,hc,kr,g%y0,merge(wb,g%yend,kd==-2),g%a,g%b,g%t,m,dd,de)
-      if(fast)call fast_accept(kd,c,dd,hs,hc,k,x,fast)
-   endif
-   if(fast)then
-      status=merge(2,0,de>1e-8_dp*rb*pow2m(kr))     ! status 2: low confidence
-      if(k==0)then
-         k=1;x=0;hs=0;hc=1                           ! parabola
-      endif
-   elseif(status==-4.and.m>0)then
-      call mrev_edge(g,m,br,k,x,hs,hc,status)
-   endif
-   if(status>=0.and.status<=2)then
-      call velocities(g,r1,r2,direction,k,x,hs,hc,near,v1,v2)
-      if(.not.all(ieee_is_finite(v1)).or..not.all(ieee_is_finite(v2)))status=-4
-   endif
-   if(status<0.or.status>2)then
-      v1=ieee_value(0.0_dp,ieee_quiet_nan);v2=v1
-   endif
+   include 'excali_one_body.inc'
 
    contains
    include 'excali_stages.inc'
    end subroutine excali_one
+
+   ! Every solution for one geometry and time: m = 0 and both branches of each
+   ! m = 1..N_max, in that order (normalized units, as excali_one). The minimum
+   ! time of m revolutions lies in (m*P, (m+1)*P), P = pi*s**1.5/sqrt2 the
+   ! period of the minimum-energy ellipse (every ellipse through both points has
+   ! a >= s/2, and the minimum-energy one needs less than one more period), so
+   ! N_max is n_up = floor(t/P) or n_up - 1; the solve at n_up decides. The
+   ! geometry is computed once. Results equal excali_one's for each (m, branch).
+   ! ns = number of entries filled (at most 2*mcap+1); nmax = N_max, or -1 if
+   ! the geometry is invalid; ns < 2*nmax+1 only if mcap < nmax.
+   subroutine excali_solve_all(r1,r2,tof,direction,mcap,ns,nmax,nrev,branch,v1,v2,status,half,plane_normal)
+   real(dp),intent(in)          :: r1(3),r2(3),tof
+   integer,intent(in)           :: direction,mcap
+   integer,intent(out)          :: ns,nmax,half
+   integer,intent(out)          :: nrev(2*mcap+1),branch(2*mcap+1),status(2*mcap+1)
+   real(dp),intent(out)         :: v1(3,2*mcap+1),v2(3,2*mcap+1)
+   real(dp),optional,intent(in) :: plane_normal(3)
+   type(frame) :: g
+   real(dp) :: chord0,semi0
+   integer :: st,m,b,nup
+   ns=0;nmax=-1;half=0
+   v1=ieee_value(0.0_dp,ieee_quiet_nan);v2=v1;status=-1;nrev=0;branch=0
+   if(abs(direction)/=1.or.mcap<0.or..not.(tof>0).or..not.ieee_is_finite(tof))return
+   call geometry(r1,r2,tof,direction,g,st,half,plane_normal)
+   if(st/=-4)then
+      status(1)=st;return
+   endif
+   ns=1;nmax=0
+   call solve_m(0,-1,v1(:,1),v2(:,1),status(1))
+   chord0=sqrt((g%rn1-g%rn2)**2+4*g%rn1*g%rn2*g%ss**2);semi0=(g%rn1+g%rn2+chord0)/2
+   nup=int(min(g%t/(pi*semi0*sqrt(semi0)/sqrt2),real(mcap,dp)))
+   do m=1,nup
+      do b=-1,1,2
+         ns=ns+1;nrev(ns)=m;branch(ns)=b
+         call solve_m(m,b,v1(:,ns),v2(:,ns),status(ns))
+      enddo
+      if(status(ns)==5.and.status(ns-1)==5)then
+         ns=ns-2;exit                                  ! m = n_up infeasible
+      endif
+      nmax=m
+   enddo
+   branch(1)=-1
+
+   contains
+
+   subroutine solve_m(m,br,v1,v2,status)
+   integer,intent(in)   :: m,br
+   real(dp),intent(out) :: v1(3),v2(3)
+   integer,intent(out)  :: status
+   real(dp) :: x,c,hs,hc,wb,lb,ub,dd,de,rb,el,vs,chord,semi
+   integer :: k,kd,kr
+   logical :: fast,near,fin
+   v1=ieee_value(0.0_dp,ieee_quiet_nan);v2=v1;status=-4
+   include 'excali_one_body.inc'
+   end subroutine
+
+   include 'excali_stages.inc'
+   end subroutine excali_solve_all
 
    ! Multiple revolutions off the tables (|tau| > 0.9): the same three steps as
    ! the table path, in the coordinate zeta about the crowded pole,
