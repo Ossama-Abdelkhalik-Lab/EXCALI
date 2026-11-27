@@ -285,12 +285,15 @@
       ! f,g divides by g ~ cos(theta/2): its error grows like 1/cs (14 eps at
       ! cs 0.3-0.4, 40 at 0.1-0.2), crossing the radial form's between cs
       ! 0.2 and 0.4, hence cs > 0.3.
-      pure subroutine velocities(g,r1,r2,direction,k,x,sw,dw,fine,v1,v2)
+      pure subroutine velocities(g,r1,r2,direction,k,x,sw,dw,fine,v1,v2,rs)
          type(frame),intent(in)::g
          real(dp),intent(in)::r1(3),r2(3),x,sw,dw
          integer,intent(in)::direction,k
          logical,intent(in)::fine
          real(dp),intent(out)::v1(3),v2(3)
+         ! Optional root state for excali_sens: coordinate (1 v, 2 pi-v, -1 w, -2 xi),
+         ! the root in it, y (normalized) and 1 if Lagrange f,g was used.
+         real(dp),optional,intent(out)::rs(4)
          real(dp)::p,c,s,y,dc,sh,ch,vr1,vr2,vt1,vt2
          logical::fg
          p=sign(1.0_dp,g%a);fg=fine;sh=sw;ch=dw
@@ -333,6 +336,10 @@
                   fg=.true.
                endif
             endif
+         endif
+         if(present(rs))then
+            rs(1)=k;rs(2)=x;rs(3)=y*g%scale;rs(4)=merge(1._dp,0._dp,fg.and.g%cs>.3_dp)
+            if(k==-1)rs(2)=2*asinh(sh)
          endif
          dc=p*g%cs-c
          if(p*g%cs*c>0.and.abs(p*g%cs+c)>0.5_dp)dc=(s-g%ss*g%ss)/(p*g%cs+c)

@@ -837,3 +837,87 @@ Without contraction (`-ffp-contract=off`, as in a baseline x86-64 build), one do
 | Timing | unchanged within noise | (emulated, not timed) |
 
 Status now differs by platform for these cases (status 2 on macOS through the rectangle's error estimate), as it already did for other near-`t_min` cases.
+
+## First- and second-order sensitivities (2026-11-27)
+
+**What.** `excali_sens_solve` (module `excali_sens`, `src/excali_sensitivities.F90` with the template `src/excali_sens_ad.inc`) solves like `excali_solve` and returns the 6×7 Jacobian of `[v1, v2]` with respect to `[r1, r2, tof]` (`mu` fixed), and, if `hess` is present, the 6×7×7 Hessian.
+
+**Method.**
+- **Implicit differentiation at the solver's converged root.**
+  - The time equation G(α, r1, r2) = √y·(y·F(α) + a) − √μ·tof and the velocity formulas are evaluated once at the root.
+  - This uses forward-mode automatic differentiation over (r1, r2, α), with the solver's own cancellation-free forms.
+  - Then α_z = −G_z/G_α, α_zz from the second-order implicit formula, and J and H by the chain rule.
+- **AD types.** The template is compiled twice: a gradient-only type for J, and one with a packed 28-entry symmetric Hessian for J + H.
+- **Root state.** `excali_one` gets an optional output `rstate`: the coordinate, the root in it, y and the f,g flag. Existing calls are unchanged.
+- **Root coordinates:**
+  - X = ±x² for zero-revolution v or w below 1.6. A 40-term exact-rational series keeps F′ and F″ accurate there; the closed form's derivatives cancel like 1/x², which put long-way ellipses up to 60× above their floor.
+  - v; π − v.
+  - w. For long-way hyperbolas where y·F + a cancels more than 4×, the solver's form ((y0 + b)·cosh w − b)/sinh²w − y·w/sinh³w is used, with y0 + b = q² + 2p. Large-w hyperbolas were otherwise up to 4e-9 off.
+  - The solver's ξ = w_b − w, with y = 2b·sinh(w_b − ξ/2)·sinh(ξ/2) and w_b differentiated. Mapping ξ to w had left 7e-13 in H at ξ = 1e-4.
+  - The value of y is always the solver's.
+- **Half-angle functions.** Signed about the plane normal h: cs = cos(θ/2) < 0 on the long way, ss = sin(θ/2), each from the side of 1 ± cos θ that doesn't cancel. They are smooth through 180° when h is fixed (`plane_normal`).
+
+**Reference.**
+- An independent mpmath solver at 100 digits: universal X for zero revolutions, v for multiple revolutions, radial/transverse velocities, the same plane convention.
+- J and H by central differences (steps 1e-30 and 1e-22, relative).
+- Cross-checks: complex-step J agrees to 1e-54–1e-61; the central-difference-of-complex-step H agrees to 1e-24 (ellipse, parabola, near-pole, multi-revolution).
+- **Physical floor:** the relative change of the exact J (H) when the double inputs move by one ulp in random directions (4 perturbations for stress cases, 2–3 for random ones).
+- **Gate:** relative Frobenius error per block ≤ max(1e-14, 5 × floor).
+
+**Stress classes** (inputs randomly rotated in 3-D; relative Frobenius error, floor in parentheses):
+
+| case | J | H |
+|---|---|---|
+| 3-D ellipse | 7.7e-16 (2.7e-16) | 9.1e-16 (4.0e-16) |
+| exact parabola X = 0 | 4.3e-16 (2.2e-16) | 8.4e-16 (3.5e-16) |
+| 179.9999° | 1.6e-11 (1.1e-10) | 3.1e-11 (2.1e-10) |
+| near pole, π − v = 0.01 | 3.7e-16 (2.8e-16) | 4.7e-16 (4.5e-16) |
+| multi-rev m = 1, v = 1.5 | 3.6e-16 (3.0e-16) | 5.7e-16 (3.9e-16) |
+| `mrev_edge`, m = 5, 359° | 1.5e-14 (1.3e-14) | 4.1e-14 (2.2e-14) |
+| near-coincident 0.001° (f,g branch) | 2.0e-16 (1.2e-13) | 4.6e-16 (1.6e-13) |
+| branch point ξ = 1e-4 | 1.1e-15 (4.3e-16) | 1.9e-15 (6.0e-16) |
+| near fold ε = 1e-6, branch −1 / +1 | 2.6e-10, 2.7e-10 (2.2e-10) | 7.9e-10, 8.2e-10 (6.6e-10) |
+| exact 180° with `plane_normal` (H in-plane) | 4.6e-16 (2.9e-16) | 5.5e-16 (4.0e-16) |
+| r1 = r2(1 ± 1e-15) | 4.2e-16, 3.1e-16 | 6.8e-16, 6.4e-16 |
+| units 1e50; km with μ⊕ | 3.5e-16; 3.9e-16 | 3.6e-16; 3.6e-16 |
+| long-way hyperbola, w = 2 | 1.3e-15 (4.1e-16) | 2.2e-15 (7.2e-16) |
+
+- **179.9999°:** the floor is the transfer plane's own ill-conditioning from double inputs (eps/sin θ). The results sit below it.
+- **Exact 180° with `plane_normal`:** out-of-plane second derivatives depend on convention there, since sin θ about the fixed normal and cos θ disagree off the plane. Only the in-plane Hessian (4 in-plane position directions plus tof) is compared.
+
+**Random 3-D cases.** 2,989 cases (two seeds), solved and referenced; 11 were infeasible multi-revolution requests. Mix:
+- 35% ellipses;
+- 25% hyperbolas (t/t_p from 1e-3);
+- 15% near-parabolic (|t/t_p − 1| from 1e-12 to 3%);
+- 25% multi-revolution, m = 1–5.
+
+Radius ratio 0.3–3; any transfer angle and direction.
+
+| | p50 | p99 | p99.9 | max |
+|---|---|---|---|---|
+| J | 4.8e-16 | 5.0e-15 | 1.1e-14 | 2.8e-13 |
+| H | 7.6e-16 | 1.7e-14 | 6.3e-14 | 8.6e-13 |
+
+- **Within the gate:** 2,917 of 2,989 (97.6%). J alone is within it in every case but one.
+- **Outside, 72 cases, all on H:**
+  - 33 near-parabolic, 23 hyperbolas, 15 ellipses and 1 multi-revolution case;
+  - typically 1e-14 to 8e-14, 10–130× their own Hessian floor (floors near 5e-16).
+  
+  Most are long-way transfers, where y·F + a carries a few bits of cancellation; injecting its exact value √μ·tof/√y did not help.
+- **Largest multi-revolution error** (J 2.8e-13, H 8.6e-13) is at its J floor (1.6e-13).
+
+**Linux x86-64** (Docker gcc:14, emulated): ctest 5/5, including `excali_sensitivities`.
+
+**Cost** (provisional, Apple M1 under load from other jobs; zero-revolution random cases, best of 9):
+
+| | ns per solve |
+|---|---|
+| `excali_one` | 156 |
+| J | 1,250 (8×) |
+| J + H | 7,150 (46×) |
+| ivLam `ivLam_NtildeWithDerivs`, J | 304 |
+| ivLam `ivLam_NtildeWithDerivs`, J + H | 1,461 |
+
+The generic AD costs far more than a hand-differentiated, common-subexpression-eliminated evaluation would. Timings are to be repeated on an idle machine.
+
+**Test.** `excali_sensitivities` (`tests/test_excali_sens.f90`) checks the 16 stress cases against stored 100-digit references (`tests/data/sens_reference.txt`), each with its own gate.

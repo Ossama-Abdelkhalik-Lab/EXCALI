@@ -110,13 +110,14 @@ contains
    ! One case, straight-line: the same stages as solve_chunk (shared through
    ! excali_stages.inc) without the block's arrays and stage loops, which only
    ! pay when several cases overlap. Results are identical to excali_batch.
-   subroutine excali_one(r1,r2,tof,direction,v1,v2,status,half,nrev,branch,plane_normal)
+   subroutine excali_one(r1,r2,tof,direction,v1,v2,status,half,nrev,branch,plane_normal,rstate)
    real(dp),intent(in)          :: r1(3),r2(3),tof
    integer,intent(in)           :: direction
    real(dp),intent(out)         :: v1(3),v2(3)
    integer,intent(out)          :: status,half
    integer,optional,intent(in)  :: nrev,branch
    real(dp),optional,intent(in) :: plane_normal(3)
+   real(dp),optional,intent(out):: rstate(4)    ! root state for excali_sens (see velocities)
    type(frame) :: g
    real(dp) :: x,c,hs,hc,wb,lb,ub,dd,de,rb,el,vs,chord,semi
    integer :: m,br,k,kd,kr
@@ -176,7 +177,7 @@ contains
       call mrev_edge(g,m,br,k,x,hs,hc,status)
    endif
    if(status>=0.and.status<=2)then
-      call velocities(g,r1,r2,direction,k,x,hs,hc,near,v1,v2)
+      call velocities(g,r1,r2,direction,k,x,hs,hc,near,v1,v2,rstate)
       if(.not.all(ieee_is_finite(v1)).or..not.all(ieee_is_finite(v2)))status=-4
    endif
    if(status<0.or.status>2)then
