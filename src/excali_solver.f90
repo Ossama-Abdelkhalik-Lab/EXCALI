@@ -693,12 +693,22 @@ contains
       real(dp),intent(in)::f(n),fp(n),fa,fb,lo,hi,xn(n),wn(n),c
       real(dp),intent(out)::root,err
       real(dp)::q0,q1,q2,e(n),d
+      integer::j
       e=xn-c
       q0=fb-fa-sum(wn*fp)
       q1=(hi-c)*fb-(lo-c)*fa-sum(wn*(f+e*fp))
       q2=(hi-c)**2*fb-(lo-c)**2*fa-sum(wn*e*(2*f+e*fp))
       d=q1/q0;root=c+d
       err=abs(q2/q0-d*d)/(hi-lo)
+      if(.not.(abs(d)<huge(d)))then
+         ! A node or end where f is infinite is the root itself (see rect_ratio).
+         if(.not.(abs(fa)<huge(fa)))root=lo
+         if(.not.(abs(fb)<huge(fb)))root=hi
+         do j=1,n
+            if(.not.(abs(f(j))<huge(f(j))))root=xn(j)
+         enddo
+         if(abs(root-c)<huge(root))err=0
+      endif
    end subroutine
 
    pure subroutine rect_ratio(kind1,c,hs,hc,kr,y0,yend,a,b,t,m,dd,de)
@@ -813,7 +823,18 @@ contains
       q2=el*el*(fb-fa)-el*(q2+r2)
       dd=q1/q0
       de=abs(q2/q0-dd*dd)
-      if(.not.(dd==dd))dd=huge(dd)
+      if(.not.(abs(dd)<huge(dd)))then
+         ! T-t rounded to exactly 0 at a node or end (f infinite, the ratio
+         ! NaN): that point is the root to rounding. Without FMA contraction
+         ! (x86-64 baseline builds) this happens near t_min, where T-t is
+         ! tiny across the rectangle; with FMA, q*g-t is never exactly 0.
+         dd=huge(dd)
+         do j=1,np
+            if(.not.(abs(f(j))<huge(f(j))))then
+               dd=el*uu(j);de=0
+            endif
+         enddo
+      endif
       if(.not.(de==de))de=huge(de)
    end subroutine
 

@@ -814,3 +814,26 @@ Combined: the same max errors in every band, no ms4d feasibility disagreements, 
   - multirev and adversarial: statuses identical to the previous build.
   - The `theta = 359.22 deg` sweep: 41 roots outside before, none after; max 5.0× the floor.
   - Two adversarial cases (752, 778; category 10, near `t_min`) return -4 on x86-64 in both builds, and status 2 on macOS. They are exact node hits: without FMA contraction `T - t` rounds to 0 at node 2 and node 1 of the final rectangle. A non-finite-node guard solves both (errors 2.3e-9 and 1.5e-9, about twice the floor). Separate change.
+
+## Exact node hits without FMA (2026-11-26)
+
+**The fault.** When `T - t` rounds to exactly 0 at a node or end of a rectangle, `f` is infinite, the ratio is NaN and the rectangle is rejected. On arm64, gfortran fuses `q*g - t` into one FMA, so the difference is never exactly 0. Two checks:
+- 6,000 consecutive doubles of `t` across a fixed node: no failure.
+- 40,000 doubles around each node crossing through `excali_one`: no failure.
+
+Without contraction (`-ffp-contract=off`, as in a baseline x86-64 build), one double of `t` per crossing fails. Near `t_min`, `T - t` is tiny across the whole rectangle, so this is not rare there. On Linux x86-64 (Docker gcc:14, emulated), 13 of 780 adversarial near-minimum cases (category 10) hit a node:
+- 2 returned -4 (752, 778): for m > 0 a rejected rectangle falls through to `mrev_edge`, which failed there.
+- 11 returned `mrev_edge`'s result with status 2.
+
+**The change.** In `rect_ratio` and `global_ratio`, only when the ratio is non-finite, the node or end where `f` is infinite is returned as the root, with error estimate 0: `T = t` to rounding there. There is no work on the normal path.
+
+**Results.**
+
+| | macOS (arm64) | Linux x86-64 |
+|---|---|---|
+| Truth sets (zero_rev, multirev, adversarial, sweeps, harness_mixed, infeasible, dev) | bit-identical | identical, except the 13 node hits |
+| The 13 node hits | — | status 0, root errors 0.1–3.8× the double-precision floor (was 2 × -4 and 11 × status 2) |
+| ctest | 4/4 | 4/4 |
+| Timing | unchanged within noise | (emulated, not timed) |
+
+Status now differs by platform for these cases (status 2 on macOS through the rectangle's error estimate), as it already did for other near-`t_min` cases.
