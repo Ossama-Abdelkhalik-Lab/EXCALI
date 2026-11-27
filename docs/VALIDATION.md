@@ -908,3 +908,26 @@ An external roadmap (Gemini) argued that most single-solve time is outside `rect
 On x86-64, `-march=native` made `main` itself 6 ns slower.
 
 ctest 4/4.
+
+## All revolutions in one call: excali_solve_all (2026-11-27)
+
+**API.** `excali_solve_all(r1, r2, tof, direction, mcap, ns, nmax, nrev, branch, v1, v2, status, half[, plane_normal])`, in normalized units like `excali_one`. It returns m = 0, then both branches of each m = 1..N_max, in that order.
+
+**How N_max is found.** Every ellipse through both points has a ≥ s/2, so T_min(m) > m·P, where P = π s^1.5/√2 is the period of the minimum-energy ellipse; the minimum-energy transfer itself takes less than one more period. So N_max is n_up = ⌊t/P⌋ or n_up − 1, and the solve at n_up decides.
+
+**Shared work.** The geometry is computed once. `excali_one`'s body after the geometry moved, unchanged, into `src/excali_one_body.inc`, which both routines include, so `excali_one` compiles as before: timing within noise on M1 and x86-64.
+
+**Tests:**
+- 20,000 random 3-D cases (546,068 solutions): every entry identical to `excali_one` for the same (m, branch).
+- N_max agrees with the quad-precision t_min in every case.
+- 3,000 geometries at t = t_min(N)·(1 ± 1e-6, 1e-10, 1e-12): N_max exact.
+- New CTest `excali_solve_all` (3,000 cases, the same checks without quad precision); 5/5.
+
+**Speed** (per solution, against an `excali_one` loop over the same list):
+
+| N_max | 1 | 2 | 5 | 10 | 50 |
+|---|---|---|---|---|---|
+| M1 | 0.65× | 0.73× | 1.02× | 1.14× | 1.19× |
+| x86-64 | 0.87× | 0.97× | 1.07× | 1.12× | 1.18× |
+
+It is a convenience for all-N searches, not a speed-up below about five revolutions. The external roadmap projected 1.26–1.50×.
