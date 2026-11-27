@@ -1161,8 +1161,8 @@ contains
    ! Multi-revolution table starter: tau and the semiperimeter sl, time t,
    ! revolutions m and branch br. stat=5: t is below the tabulated minimum
    ! time by more than the table error (infeasible); stat=1: v is the branch
-   ! root, within 4.1% of min(|v-v*|, pole distance), from the normalized
-   ! table w = ((1-f)/f)*(|sigma|/(1-|sigma|)), f = (v-v*)/(P-v*); stat=2: near the fold
+   ! root, within 2.1% of min(|v-v*|, pole distance), from the normalized
+   ! table d/d_ref (HarmRat, see tools/gen_tables.py); stat=2: near the fold
    ! (|sigma| < 1e-2, or within the table's t_min margin), vs is v* within
    ! 6e-5 of min(v*,pi-v*) for mrev_fold; stat=0: outside the tables. Slices
    ! in mu=1/m by 4-point Lagrange.
@@ -1213,7 +1213,7 @@ contains
       sig=sqrt(1-r)
       if(sig<1e-2_dp)return
       stat=0;h=merge(2,1,br>0)
-      u=(asin(tau*mr_tk)/mr_tc+1)*((mr_nt-1)/2._dp)   ! grid clustered toward |tau| = 0.9
+      u=(sign(1-sqrt(1-abs(tau)),tau)/mr_z1+1)*((mr_nt-1)/2._dp)   ! grid uniform in sign(tau)*(1-sqrt(1-|tau|))
       i=min(max(int(u)-1,0),mr_nt-4);call lagrange4(u-i,wt)
       u=sqrt(sig)*(mr_ns-1)                            ! grid uniform in sqrt|sigma|
       j=min(max(int(u)-1,0),mr_ns-4);call lagrange4(u-j,ws)
@@ -1223,12 +1223,13 @@ contains
                +wt(3)*mr_q(i+3,j+jb,h,km(k))+wt(4)*mr_q(i+4,j+jb,h,km(k)))
          enddo
       enddo
-      ! The table holds the odds ratio w = ((1-f)/f)*(sig/(1-sig)); with
-      ! 1-sig = r/(1+sig) the pole distance (1-f)*|P-v*| = r*w/(r*w+sig*(1+sig))*|P-v*|
-      ! is free of cancellation and keeps full precision as t -> infinity (a
-      ! relative error e in w is a relative error of at most e in both v-v*
-      ! and the pole distance). The root comes back in v (kx=1), or in pi-v near pi (kx=2).
-      dpl=r*v/(r*v+sig*(1+sig))*merge(pi-vs,vs,br>0)
+      ! The table holds the pole distance over the harmonic anchor
+      ! d_ref = r/(1+sig)*span/(1-sig+sig**2*beta), span = |P-v*|,
+      ! beta = span*c_m*(1+tau**2)/(2*C_PI*(1+br*tau)**2): no cancellation, and
+      ! full precision as t -> infinity. The root comes back in v (kx=1), or in
+      ! pi-v near pi (kx=2).
+      u=merge(pi-vs,vs,br>0)
+      dpl=r/(1+sig)*u/(1-sig+sig*sig*(u*cm*(1+tau*tau)/(2*mr_cpi*(1+br*tau)**2)))*v
       kx=1
       if(br<0)then
          v=dpl
