@@ -1,7 +1,7 @@
 #!/bin/bash
 # Host check of the CUDA port against Fortran excali_one on truth CSVs.
 # usage: cuda/test/run_host_test.sh <csv>... (from the repository root)
-# Builds both with and without FMA contraction; without it the two must be bit-identical.
+# Needs numpy (set PY to a Python that has it). Builds both with and without FMA contraction; without it the two must be bit-identical.
 set -e
 B=${BUILD:-build/cuda_host}; mkdir -p $B/obj $B/objn
 FC=${FC:-gfortran}; CXX=${CXX:-g++}
@@ -15,6 +15,6 @@ for f in "$@"; do
   n=$(basename $f .csv)
   $B/fortran_driver $f $B/f_$n.txt; $B/host_driver $f $B/c_$n.txt
   $B/fortran_driver_nofma $f $B/fn_$n.txt; $B/host_driver_nofma $f $B/cn_$n.txt
-  echo "== $n, default contraction"; python3 cuda/test/compare.py $B/c_$n.txt $B/f_$n.txt
-  echo "== $n, -ffp-contract=off (must be identical)"; python3 cuda/test/compare.py $B/cn_$n.txt $B/fn_$n.txt
+  echo "== $n, default contraction"; ${PY:-python3} cuda/test/compare.py $B/c_$n.txt $B/f_$n.txt
+  echo "== $n, -ffp-contract=off (must be identical)"; ${PY:-python3} cuda/test/compare.py $B/cn_$n.txt $B/fn_$n.txt
 done
