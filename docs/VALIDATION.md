@@ -980,3 +980,22 @@ Results:
 The C layer adds nothing measurable. Python's cost is per call, not per case: NumPy's address lookup alone is about 850 ns per array, and a batch call passes ten arrays. The `ndpointer` argument types were replaced by raw addresses with explicit checks, which took the per-call cost from 9.5 µs to 5.6 µs (single) and from 27 µs to 19 µs (batch of 1).
 
 Not done: a compiled extension module (nanobind or the C API) for lower per-call cost, and a separate EXCALI-only MEX gateway.
+
+## Removals and a moved folder (2026-11-27)
+
+- **Hash check removed:** the `original_hashes` CTest, `cmake/verify_original.cmake` and `original/SHA256.json`. The originals stay byte-for-byte as imported; git history records any change.
+- **`docs/validated_sources.json` removed:** stale hashes of old sources, read by nothing.
+- **Profile-guided build removed:** the `EXCALI_PGO` option and `examples/pgo_train.f90`. Measured on the current solver (M1, interleaved, best of 3):
+
+  | | Single solves | Batches |
+  |---|---|---|
+  | PGO vs normal build | −5% to +6% (zero-rev truth set 230 → 218 ns, multi-rev 205 → 218 ns) | 4–14% slower (multi-rev 178 → 202 ns) |
+
+  The 4% gain recorded earlier no longer holds.
+- **`excali_solve_all` removed (#25):** an `excali_one` loop over m returns the same results and is faster below about 5 revolutions; it was only 1.19× faster at N_max = 50. `excali_one`'s body is back inline, identical to its text before #25, so `excali_one_body.inc` is gone.
+- **Adapters moved:** the EXCALI v0/v1 adapters moved from `src/` to `adapters/`; `src/` now holds only the solver and the C shim.
+- **README claims re-measured:**
+  - `benchmark_mixed` on M1: 0.80× ivLam overall, 0.69–0.98× per class, 0.48× infeasible.
+  - Maximum error lower than ivLam in every class except `hyperbolic_fast` (3.1e-15 vs 2.9e-15).
+
+  It previously said 0.88× and lower error in every class.

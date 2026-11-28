@@ -1,6 +1,0 @@
-{
-  "src/excali_v1_adapter.f90": "e18d5052f7e574611010fe3bdddcb1bbc0386f31da43935a6061891e69245bc4",
-  "src/excali_solver.f90": "7e6c832877f999e20262f598316dc96dc1938f3bb1dbaa25854163ab9fe32dec",
-  "src/excali_stages.inc": "1a1fd1773b8fdf3e172a630ea72efcf90a5f8471fdba891b82c4deaaf9782422",
-  "src/excali_tables.inc": "ff3c336ded25975787270749fa4001564d5a3500e0f2cfd08528000698d2ce15"
-}
